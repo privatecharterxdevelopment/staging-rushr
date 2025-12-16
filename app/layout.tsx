@@ -94,9 +94,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     html.classList.toggle('compact', dens === 'compact');
 
     // Detect native Capacitor app BEFORE React hydration to prevent header/footer flash
-    // Check for Capacitor bridge object which is injected by native shell
+    // Check for Capacitor bridge OR custom user agent (fallback for cached pages)
     var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    if (isNative) {
+    var isNativeUA = navigator.userAgent.indexOf('Rushr-iOS-Native') !== -1;
+    if (isNative || isNativeUA) {
       html.classList.add('native-app');
     }
   } catch(e) {}
