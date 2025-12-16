@@ -22,6 +22,17 @@ html.native-app footer {
   display: none !important;
 }
 
+/* Add safe area padding to main content in native app mode */
+html.native-app main {
+  padding-top: env(safe-area-inset-top, 44px) !important;
+}
+
+/* Ensure pages with min-h-screen account for safe area in native app */
+html.native-app .min-h-screen {
+  min-height: calc(100vh - env(safe-area-inset-top, 44px)) !important;
+  padding-top: env(safe-area-inset-top, 44px) !important;
+}
+
 /* Satoshi Font */
 @font-face {
   font-family: 'Satoshi';
