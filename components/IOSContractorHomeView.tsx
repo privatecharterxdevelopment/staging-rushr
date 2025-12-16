@@ -14,6 +14,8 @@ import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { App } from '@capacitor/app'
 import dynamic from 'next/dynamic'
+import type { FindProMapboxHandle } from './FindProMapbox'
+import { Geolocation } from '@capacitor/geolocation'
 
 // Dynamically import map component
 const FindProMapbox = dynamic(() => import('./FindProMapbox'), {
@@ -180,6 +182,424 @@ const ListItem = ({
 
 // Divider component
 const Divider = () => <div className="h-px bg-gray-100 ml-14" />
+
+// Type for active job tracking
+type LatLng = [number, number]
+
+interface ActiveJob {
+  id: string
+  title: string
+  status: string
+  address: string | null
+  latitude?: number
+  longitude?: number
+  homeowner_id: string
+  homeowner_name?: string
+  homeowner_phone?: string
+  final_cost?: number
+  accepted_bid_id?: string
+}
+
+// ============= CONTRACTOR JOB TRACKING VIEW =============
+interface ContractorJobTrackingViewProps {
+  job: ActiveJob
+  contractorId: string
+  onBack: () => void
+  onJobComplete: () => void
+}
+
+function ContractorJobTrackingView({ job, contractorId, onBack, onJobComplete }: ContractorJobTrackingViewProps) {
+  const mapRef = useRef<FindProMapboxHandle>(null)
+  const [contractorLocation, setContractorLocation] = useState<LatLng | null>(null)
+  const [jobStatus, setJobStatus] = useState(job.status)
+  const [eta, setEta] = useState<number | null>(null)
+  const [distance, setDistance] = useState<string | null>(null)
+  const [showCompleteModal, setShowCompleteModal] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [contractorConfirmed, setContractorConfirmed] = useState(false)
+  const [homeownerConfirmed, setHomeownerConfirmed] = useState(false)
+
+  // Get contractor's current location
+  useEffect(() => {
+    const watchLocation = async () => {
+      try {
+        const watchId = await Geolocation.watchPosition(
+          { enableHighAccuracy: true },
+          (position) => {
+            if (position) {
+              const newLocation: LatLng = [position.coords.latitude, position.coords.longitude]
+              setContractorLocation(newLocation)
+
+              // Update location in database for homeowner to track
+              updateLocationInDatabase(newLocation)
+            }
+          }
+        )
+
+        return () => {
+          Geolocation.clearWatch({ id: watchId })
+        }
+      } catch (err) {
+        console.error('Error watching location:', err)
+        // Fallback to single position
+        try {
+          const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true })
+          setContractorLocation([pos.coords.latitude, pos.coords.longitude])
+        } catch (e) {
+          console.error('Fallback location error:', e)
+        }
+      }
+    }
+
+    watchLocation()
+  }, [])
+
+  // Update contractor location in database
+  const updateLocationInDatabase = async (location: LatLng) => {
+    try {
+      await supabase
+        .from('contractor_location_tracking')
+        .upsert({
+          job_id: job.id,
+          contractor_id: contractorId,
+          latitude: location[0],
+          longitude: location[1],
+          last_update_at: new Date().toISOString()
+        }, {
+          onConflict: 'job_id,contractor_id'
+        })
+    } catch (err) {
+      console.error('Error updating location:', err)
+    }
+  }
+
+  // Calculate ETA to job location
+  useEffect(() => {
+    const calculateETA = async () => {
+      if (!contractorLocation || !job.latitude || !job.longitude) return
+
+      try {
+        const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+        if (!MAPBOX_TOKEN) return
+
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${contractorLocation[1]},${contractorLocation[0]};${job.longitude},${job.latitude}?overview=full&geometries=geojson&access_token=${MAPBOX_TOKEN}`
+        )
+        const data = await response.json()
+        if (data.routes?.[0]?.duration) {
+          const minutes = Math.ceil(data.routes[0].duration / 60)
+          setEta(minutes)
+
+          // Update ETA in database
+          await supabase
+            .from('contractor_location_tracking')
+            .update({ eta_minutes: minutes })
+            .eq('job_id', job.id)
+            .eq('contractor_id', contractorId)
+        }
+        if (data.routes?.[0]?.distance) {
+          const miles = (data.routes[0].distance / 1609.34).toFixed(1)
+          setDistance(`${miles} mi`)
+        }
+      } catch (err) {
+        console.error('Error calculating ETA:', err)
+      }
+    }
+
+    if (jobStatus === 'confirmed') {
+      calculateETA()
+      const interval = setInterval(calculateETA, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [contractorLocation, job.latitude, job.longitude, jobStatus, job.id, contractorId])
+
+  // Show route on map
+  useEffect(() => {
+    if (contractorLocation && job.latitude && job.longitude && mapRef.current && jobStatus === 'confirmed') {
+      mapRef.current.showRoute(
+        contractorLocation[0],
+        contractorLocation[1],
+        job.latitude,
+        job.longitude
+      )
+    }
+  }, [contractorLocation, job.latitude, job.longitude, jobStatus])
+
+  // Subscribe to job status updates
+  useEffect(() => {
+    const channel = supabase
+      .channel(`contractor-job-status-${job.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'homeowner_jobs',
+          filter: `id=eq.${job.id}`
+        },
+        (payload) => {
+          if (payload.new) {
+            const updatedJob = payload.new as any
+            setJobStatus(updatedJob.status)
+            setHomeownerConfirmed(updatedJob.homeowner_confirmed_complete || false)
+            setContractorConfirmed(updatedJob.contractor_confirmed_complete || false)
+
+            // If both confirmed, job is complete
+            if (updatedJob.homeowner_confirmed_complete && updatedJob.contractor_confirmed_complete) {
+              triggerNotification(NotificationType.Success)
+              showGlobalToast('Job completed! Payment has been released.', 'success', 5000)
+              setTimeout(() => onJobComplete(), 2000)
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [job.id, onJobComplete])
+
+  // Handle arrival confirmation
+  const handleConfirmArrival = async () => {
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/jobs/confirm-arrival', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: job.id,
+          contractorId
+        })
+      })
+
+      const data = await response.json()
+      if (data.success) {
+        await triggerNotification(NotificationType.Success)
+        setJobStatus('in_progress')
+        showGlobalToast('Arrival confirmed! Job is now in progress.', 'success')
+      } else {
+        showGlobalToast(data.error || 'Failed to confirm arrival', 'error')
+      }
+    } catch (err) {
+      console.error('Error confirming arrival:', err)
+      showGlobalToast('Failed to confirm arrival', 'error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Handle job completion confirmation
+  const handleConfirmComplete = async () => {
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/payments/confirm-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: job.id,
+          userType: 'contractor'
+        })
+      })
+
+      const data = await response.json()
+      if (data.success) {
+        await triggerNotification(NotificationType.Success)
+        setShowCompleteModal(false)
+        setContractorConfirmed(true)
+
+        if (data.bothConfirmed) {
+          showGlobalToast('Job completed! Payment has been released.', 'success', 5000)
+          setTimeout(() => onJobComplete(), 2000)
+        } else {
+          showGlobalToast('Waiting for homeowner to confirm completion...', 'success')
+        }
+      } else {
+        showGlobalToast(data.error || 'Failed to confirm completion', 'error')
+      }
+    } catch (err) {
+      console.error('Error confirming completion:', err)
+      showGlobalToast('Failed to confirm completion', 'error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Build map items
+  const mapItems = useMemo(() => {
+    if (!job.latitude || !job.longitude) return []
+    return [{
+      id: 'destination',
+      name: 'Job Location',
+      latitude: job.latitude,
+      longitude: job.longitude,
+      services: ['Destination'],
+    }]
+  }, [job.latitude, job.longitude])
+
+  // Status display info
+  const getStatusInfo = () => {
+    switch (jobStatus) {
+      case 'confirmed':
+        return { text: 'Navigate to Job', color: 'blue', icon: '🚗' }
+      case 'in_progress':
+        return { text: 'Job In Progress', color: 'emerald', icon: '🔧' }
+      default:
+        return { text: 'Active Job', color: 'gray', icon: '📍' }
+    }
+  }
+
+  const statusInfo = getStatusInfo()
+
+  return (
+    <div className="fixed inset-0 bg-white z-50 flex flex-col">
+      {/* Map Section - Full screen */}
+      <div className="flex-1 relative">
+        <FindProMapbox
+          ref={mapRef}
+          items={mapItems}
+          radiusMiles={10}
+          searchCenter={contractorLocation || undefined}
+          fullscreen={true}
+          hideSearchButton={true}
+          hideControls={true}
+        />
+
+        {/* Back Button */}
+        <button
+          onClick={onBack}
+          className="absolute top-4 left-4 w-11 h-11 bg-white rounded-full shadow-lg flex items-center justify-center z-10 active:scale-95 transition-transform"
+          style={{ marginTop: 'env(safe-area-inset-top)' }}
+        >
+          <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+
+        {/* Status Badge - Top center */}
+        <div
+          className="absolute top-4 left-1/2 -translate-x-1/2 z-10"
+          style={{ marginTop: 'env(safe-area-inset-top)' }}
+        >
+          <div className={`bg-${statusInfo.color}-600 rounded-full px-5 py-2.5 shadow-lg flex items-center gap-2`}
+               style={{ background: jobStatus === 'confirmed' ? '#2563eb' : '#059669' }}>
+            <span className="text-lg">{statusInfo.icon}</span>
+            <span className="text-white font-bold text-[16px]">
+              {jobStatus === 'confirmed' && eta ? `${eta} min away` : statusInfo.text}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Card - Job Info */}
+      <div
+        className="bg-white rounded-t-3xl shadow-2xl"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}
+      >
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-10 h-1 bg-gray-300 rounded-full" />
+        </div>
+
+        <div className="px-4 pb-4">
+          {/* Job Title */}
+          <div className="mb-4">
+            <h2 className="text-[20px] font-bold text-gray-900">{job.title}</h2>
+            {job.homeowner_name && (
+              <p className="text-[14px] text-gray-500 mt-1">for {job.homeowner_name}</p>
+            )}
+          </div>
+
+          {/* Address */}
+          {job.address && (
+            <div className="bg-gray-50 rounded-xl p-3 mb-4">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Destination</p>
+              <p className="text-gray-900 font-semibold text-[15px]">{job.address}</p>
+            </div>
+          )}
+
+          {/* Stats Row */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-blue-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">ETA</p>
+              <p className="text-blue-700 font-bold text-[20px]">
+                {jobStatus === 'in_progress' ? '—' : eta ? `${eta}m` : '...'}
+              </p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Distance</p>
+              <p className="text-gray-700 font-bold text-[20px]">
+                {jobStatus === 'in_progress' ? '—' : distance || '...'}
+              </p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Earnings</p>
+              <p className="text-emerald-700 font-bold text-[20px]">
+                ${job.final_cost?.toFixed(0) || '—'}
+              </p>
+            </div>
+          </div>
+
+          {/* Action Buttons based on status */}
+          {jobStatus === 'confirmed' && (
+            <button
+              onClick={handleConfirmArrival}
+              disabled={submitting}
+              className="w-full py-4 rounded-xl font-bold text-[16px] text-white active:scale-98 transition-transform disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}
+            >
+              {submitting ? 'Confirming...' : 'Confirm Arrival'}
+            </button>
+          )}
+
+          {jobStatus === 'in_progress' && !contractorConfirmed && (
+            <button
+              onClick={() => setShowCompleteModal(true)}
+              className="w-full py-4 rounded-xl font-bold text-[16px] text-white active:scale-98 transition-transform"
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+            >
+              Close Job - Work Complete
+            </button>
+          )}
+
+          {contractorConfirmed && !homeownerConfirmed && (
+            <div className="bg-amber-50 rounded-xl p-4 text-center">
+              <p className="text-amber-700 font-medium">Waiting for homeowner to confirm completion...</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Job Complete Confirmation Modal */}
+      {showCompleteModal && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-[60]" onClick={() => setShowCompleteModal(false)} />
+          <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 bg-white rounded-2xl p-6 z-[60] max-w-md mx-auto">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Confirm Job Completion</h3>
+            <p className="text-gray-600 mb-6">
+              Have you completed all the work for this job? Once you and the homeowner both confirm, payment will be released to your account.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCompleteModal(false)}
+                className="flex-1 py-3 rounded-xl font-semibold text-gray-700 bg-gray-100"
+              >
+                Not Yet
+              </button>
+              <button
+                onClick={handleConfirmComplete}
+                disabled={submitting}
+                className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 disabled:opacity-50"
+              >
+                {submitting ? 'Confirming...' : 'Yes, Complete'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 // Verification Banner Component for iOS
 interface VerificationBannerProps {
@@ -1052,6 +1472,77 @@ export default function IOSContractorHomeView({ onSwitchToHomeowner }: Props) {
     chargesEnabled: boolean
   } | null>(null)
   const [loadingStripe, setLoadingStripe] = useState(true)
+  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null)
+  const [showJobTracking, setShowJobTracking] = useState(false)
+
+  // Fetch active job (accepted bid with in_progress or confirmed status)
+  const fetchActiveJob = useCallback(async () => {
+    if (!user) return
+
+    try {
+      // Find jobs where this contractor's bid was accepted and job is active
+      const { data: acceptedBids, error: bidError } = await supabase
+        .from('job_bids')
+        .select(`
+          id,
+          job_id,
+          bid_amount,
+          homeowner_jobs (
+            id,
+            title,
+            status,
+            address,
+            latitude,
+            longitude,
+            homeowner_id,
+            final_cost
+          )
+        `)
+        .eq('contractor_id', user.id)
+        .eq('status', 'accepted')
+
+      if (bidError) {
+        console.error('Error fetching accepted bids:', bidError)
+        return
+      }
+
+      // Find an active job (confirmed or in_progress)
+      const activeJobData = acceptedBids?.find(bid => {
+        const job = bid.homeowner_jobs as any
+        return job && (job.status === 'confirmed' || job.status === 'in_progress')
+      })
+
+      if (activeJobData) {
+        const jobData = activeJobData.homeowner_jobs as any
+
+        // Fetch homeowner name
+        const { data: homeowner } = await supabase
+          .from('user_profiles')
+          .select('name, phone')
+          .eq('id', jobData.homeowner_id)
+          .single()
+
+        setActiveJob({
+          id: jobData.id,
+          title: jobData.title,
+          status: jobData.status,
+          address: jobData.address,
+          latitude: jobData.latitude,
+          longitude: jobData.longitude,
+          homeowner_id: jobData.homeowner_id,
+          homeowner_name: homeowner?.name,
+          homeowner_phone: homeowner?.phone,
+          final_cost: jobData.final_cost || activeJobData.bid_amount,
+          accepted_bid_id: activeJobData.id
+        })
+      } else {
+        setActiveJob(null)
+        setShowJobTracking(false)
+      }
+    } catch (err) {
+      console.error('Failed to fetch active job:', err)
+    }
+  }, [user])
 
   // Fetch available jobs
   const fetchJobs = useCallback(async () => {
@@ -1097,8 +1588,16 @@ export default function IOSContractorHomeView({ onSwitchToHomeowner }: Props) {
     if (user && contractorProfile) {
       fetchJobs()
       fetchMyBids()
+      fetchActiveJob()
     }
-  }, [user, contractorProfile, fetchJobs, fetchMyBids])
+  }, [user, contractorProfile, fetchJobs, fetchMyBids, fetchActiveJob])
+
+  // Auto-show tracking view when there's an active job
+  useEffect(() => {
+    if (activeJob && (activeJob.status === 'confirmed' || activeJob.status === 'in_progress')) {
+      setShowJobTracking(true)
+    }
+  }, [activeJob])
 
   // Configure status bar
   useEffect(() => {
@@ -1279,9 +1778,47 @@ export default function IOSContractorHomeView({ onSwitchToHomeowner }: Props) {
     return <IOSContractorRegistration onSwitchToHomeowner={onSwitchToHomeowner} />
   }
 
+  // Handle job completion - refresh data
+  const handleJobComplete = () => {
+    setShowJobTracking(false)
+    setActiveJob(null)
+    fetchMyBids()
+    fetchActiveJob()
+  }
+
   return (
     <IOSContractorErrorBoundary>
+      {/* Active Job Tracking View */}
+      {showJobTracking && activeJob && user && (
+        <ContractorJobTrackingView
+          job={activeJob}
+          contractorId={user.id}
+          onBack={() => setShowJobTracking(false)}
+          onJobComplete={handleJobComplete}
+        />
+      )}
+
       <div className="fixed inset-0 bg-gray-50 flex flex-col">
+        {/* Active Job Banner - show when tracking is hidden but job is active */}
+        {!showJobTracking && activeJob && (
+          <button
+            onClick={() => setShowJobTracking(true)}
+            className="fixed top-0 left-0 right-0 z-40 py-3 px-4 flex items-center justify-between"
+            style={{
+              background: activeJob.status === 'confirmed' ? '#2563eb' : '#059669',
+              paddingTop: 'calc(env(safe-area-inset-top) + 12px)'
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+              <span className="text-white font-semibold">
+                {activeJob.status === 'confirmed' ? 'Navigate to Job' : 'Job In Progress'}
+              </span>
+            </div>
+            <span className="text-white/80 text-sm">Tap to view</span>
+          </button>
+        )}
+
         {/* Tab Content */}
         {activeTab === 'home' && (
           <HomeTab

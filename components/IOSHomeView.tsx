@@ -11,6 +11,8 @@ import { useHomeownerStats, HomeownerJob } from '../lib/hooks/useHomeownerStats'
 import { useConversations } from '../lib/hooks/useMessaging'
 import { supabase } from '../lib/supabaseClient'
 import dynamic from 'next/dynamic'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
 import IOSRegistration from './IOSRegistration'
 import IOSTabBar, { TabId } from './IOSTabBar'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
@@ -314,6 +316,928 @@ function ContractorBottomSheet({ contractor, onClose, onContact }: ContractorBot
   )
 }
 
+// Full-Screen Contractor Bid Profile View - Shows contractor details with map
+interface ContractorBidProfileViewProps {
+  bid: Bid
+  userLocation: LatLng
+  onClose: () => void
+  onAccept: () => void
+  onDecline: () => void
+}
+
+function ContractorBidProfileView({ bid, userLocation, onClose, onAccept, onDecline }: ContractorBidProfileViewProps) {
+  const mapContainerRef = useRef<HTMLDivElement>(null)
+  const mapObjRef = useRef<mapboxgl.Map | null>(null)
+  const [contractorLocation, setContractorLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [distance, setDistance] = useState<string | null>(null)
+  const [etaMinutes, setEtaMinutes] = useState<number | null>(bid.eta_minutes || null)
+  const [contractorDetails, setContractorDetails] = useState<{
+    name: string
+    business_name?: string
+    profile_image_url?: string
+    rating?: number
+    review_count?: number
+    years_experience?: number
+    services?: string[]
+    city?: string
+    state?: string
+  } | null>(null)
+  const [loadingDetails, setLoadingDetails] = useState(true)
+
+  // Fetch full contractor details
+  useEffect(() => {
+    const fetchContractorDetails = async () => {
+      setLoadingDetails(true)
+      try {
+        const { data } = await supabase
+          .from('pro_contractors')
+          .select('name, business_name, profile_image_url, rating, review_count, years_experience, services, city, state, latitude, longitude')
+          .eq('id', bid.contractor_id)
+          .single()
+
+        if (data) {
+          setContractorDetails({
+            name: data.name,
+            business_name: data.business_name,
+            profile_image_url: data.profile_image_url,
+            rating: data.rating,
+            review_count: data.review_count,
+            years_experience: data.years_experience,
+            services: data.services,
+            city: data.city,
+            state: data.state
+          })
+
+          // Set contractor location from profile or bid
+          const lat = bid.contractor_latitude || data.latitude
+          const lng = bid.contractor_longitude || data.longitude
+          if (lat && lng) {
+            setContractorLocation({ lat, lng })
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching contractor details:', error)
+      }
+      setLoadingDetails(false)
+    }
+
+    fetchContractorDetails()
+  }, [bid.contractor_id, bid.contractor_latitude, bid.contractor_longitude])
+
+  // Initialize map
+  useEffect(() => {
+    if (!mapContainerRef.current || mapObjRef.current) return
+
+    const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+    if (!MAPBOX_TOKEN) return
+
+    mapboxgl.accessToken = MAPBOX_TOKEN
+
+    const map = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [userLocation[1], userLocation[0]],
+      zoom: 12,
+      attributionControl: false
+    })
+
+    mapObjRef.current = map
+
+    // Add user location marker (green)
+    new mapboxgl.Marker({ color: '#10b981' })
+      .setLngLat([userLocation[1], userLocation[0]])
+      .addTo(map)
+
+    return () => {
+      map.remove()
+      mapObjRef.current = null
+    }
+  }, [userLocation])
+
+  // Add contractor marker when location is available
+  useEffect(() => {
+    if (!mapObjRef.current || !contractorLocation) return
+
+    const map = mapObjRef.current
+
+    // Add contractor marker (blue)
+    const contractorMarker = new mapboxgl.Marker({ color: '#3b82f6' })
+      .setLngLat([contractorLocation.lng, contractorLocation.lat])
+      .addTo(map)
+
+    // Fit bounds to show both markers
+    const bounds = new mapboxgl.LngLatBounds()
+    bounds.extend([userLocation[1], userLocation[0]])
+    bounds.extend([contractorLocation.lng, contractorLocation.lat])
+
+    map.fitBounds(bounds, {
+      padding: { top: 100, bottom: 350, left: 50, right: 50 },
+      maxZoom: 14
+    })
+
+    // Fetch driving distance and ETA
+    const fetchDistanceAndEta = async () => {
+      const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+      if (!MAPBOX_TOKEN) return
+
+      try {
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${contractorLocation.lng},${contractorLocation.lat};${userLocation[1]},${userLocation[0]}?access_token=${MAPBOX_TOKEN}`
+        )
+        const data = await response.json()
+
+        if (data.routes?.[0]) {
+          const route = data.routes[0]
+          const distanceMiles = (route.distance / 1609.34).toFixed(1)
+          const durationMinutes = Math.round(route.duration / 60)
+
+          setDistance(`${distanceMiles} mi`)
+          setEtaMinutes(durationMinutes)
+        }
+      } catch (error) {
+        console.error('Error fetching distance:', error)
+      }
+    }
+
+    fetchDistanceAndEta()
+
+    return () => {
+      contractorMarker.remove()
+    }
+  }, [contractorLocation, userLocation])
+
+  const displayName = contractorDetails?.business_name || contractorDetails?.name || bid.contractor_name || 'Contractor'
+  const rating = contractorDetails?.rating || bid.contractor_rating
+  const reviewCount = contractorDetails?.review_count || 0
+  const services = contractorDetails?.services || []
+  const location = contractorDetails?.city && contractorDetails?.state
+    ? `${contractorDetails.city}, ${contractorDetails.state}`
+    : null
+
+  return (
+    <div className="fixed inset-0 z-50 bg-white flex flex-col">
+      {/* Full-screen Map */}
+      <div
+        className="absolute inset-0 w-full h-full"
+        ref={mapContainerRef}
+        style={{ minHeight: '100%', minWidth: '100%' }}
+      />
+
+      {/* Back Button - Floating */}
+      <div
+        className="absolute left-4 z-10"
+        style={{ top: 'calc(env(safe-area-inset-top, 20px) + 10px)' }}
+      >
+        <button
+          onClick={async () => {
+            await triggerHaptic()
+            onClose()
+          }}
+          className="w-10 h-10 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+        >
+          <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Bottom Profile Card */}
+      <div
+        className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl"
+        style={{
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 20px) + 20px)'
+        }}
+      >
+        {/* Pull Handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-10 h-1 rounded-full bg-gray-300" />
+        </div>
+
+        {/* Profile Content */}
+        <div className="px-5 pb-4">
+          {loadingDetails ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="w-8 h-8 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Contractor Info Row */}
+              <div className="flex items-center gap-4 mb-4">
+                {/* Avatar / Profile Image */}
+                <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center relative overflow-hidden flex-shrink-0">
+                  {contractorDetails?.profile_image_url ? (
+                    <img
+                      src={contractorDetails.profile_image_url}
+                      alt={displayName}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-emerald-700 font-bold text-[28px]">
+                      {displayName[0].toUpperCase()}
+                    </span>
+                  )}
+                </div>
+
+                {/* Name, Rating, Location */}
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-[20px] font-bold text-gray-900 truncate">{displayName}</h2>
+
+                  {/* Rating */}
+                  {rating && (
+                    <div className="flex items-center gap-1 mt-1">
+                      <div className="flex">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <svg
+                            key={star}
+                            className={`w-4 h-4 ${star <= Math.round(rating) ? 'text-amber-400' : 'text-gray-200'}`}
+                            fill="currentColor"
+                            viewBox="0 0 20 20"
+                          >
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                        ))}
+                      </div>
+                      <span className="text-[13px] font-medium text-gray-700">{rating.toFixed(1)}</span>
+                      {reviewCount > 0 && (
+                        <span className="text-[13px] text-gray-500">({reviewCount})</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Location & Experience */}
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    {location && (
+                      <span className="text-[13px] text-gray-500 flex items-center gap-1">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        {location}
+                      </span>
+                    )}
+                    {contractorDetails?.years_experience && (
+                      <span className="text-[13px] text-gray-500">
+                        • {contractorDetails.years_experience}+ yrs exp
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Distance & ETA Card */}
+              <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                      <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-[12px] text-gray-500 uppercase font-medium">Distance</p>
+                      <p className="text-[18px] font-bold text-gray-900">{distance || 'Calculating...'}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[12px] text-gray-500 uppercase font-medium">Can Arrive In</p>
+                    <p className="text-[18px] font-bold text-emerald-600">
+                      {etaMinutes ? `~${etaMinutes} min` : 'Calculating...'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bid Amount Card */}
+              <div className="bg-emerald-50 rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[12px] text-emerald-700 uppercase font-medium">Their Bid</p>
+                    <p className="text-[32px] font-bold text-gray-900">${bid.bid_amount}</p>
+                  </div>
+                  {bid.message && (
+                    <div className="flex-1 ml-4 text-right">
+                      <p className="text-[12px] text-emerald-700 uppercase font-medium">Message</p>
+                      <p className="text-[13px] text-gray-600 line-clamp-2">{bid.message}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Services */}
+              {services.length > 0 && (
+                <div className="mb-5">
+                  <p className="text-[12px] text-gray-500 uppercase font-medium mb-2">Services</p>
+                  <div className="flex flex-wrap gap-2">
+                    {services.slice(0, 6).map((service: string) => (
+                      <span
+                        key={service}
+                        className="px-3 py-1.5 bg-gray-100 rounded-lg text-[13px] text-gray-700"
+                      >
+                        {service}
+                      </span>
+                    ))}
+                    {services.length > 6 && (
+                      <span className="px-3 py-1.5 bg-gray-100 rounded-lg text-[13px] text-gray-500">
+                        +{services.length - 6} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={async () => {
+                    await triggerHaptic()
+                    onDecline()
+                  }}
+                  className="flex-1 py-4 rounded-xl font-semibold text-[16px] text-gray-700 bg-gray-100 active:scale-95 transition-transform"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={async () => {
+                    await triggerHaptic(ImpactStyle.Medium)
+                    onAccept()
+                  }}
+                  className="flex-1 py-4 rounded-xl font-semibold text-[16px] text-white active:scale-95 transition-transform"
+                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+                >
+                  Accept Bid
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Full-Screen Contractor Tracking View - Shows when contractor is on the way
+interface TrackingJob {
+  id: string
+  title: string
+  status: string
+  contractor_id: string | null
+  contractor_name?: string
+  contractor_image?: string | null
+  eta_minutes?: number
+  contractor_latitude?: number
+  contractor_longitude?: number
+  address?: string | null
+  estimated_cost?: number | null
+  homeowner_confirmed_complete?: boolean
+  contractor_confirmed_complete?: boolean
+}
+
+interface ContractorTrackingViewProps {
+  job: TrackingJob
+  userLocation: LatLng
+  onBack: () => void
+  onChat: () => void
+  onJobComplete?: () => void
+}
+
+function ContractorTrackingView({ job, userLocation, onBack, onChat, onJobComplete }: ContractorTrackingViewProps) {
+  const router = useRouter()
+  const mapRef = useRef<FindProMapboxHandle>(null)
+  const [contractorLocation, setContractorLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [eta, setEta] = useState<number | null>(job.eta_minutes || null)
+  const [distance, setDistance] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState(job.status)
+  const [showCompleteModal, setShowCompleteModal] = useState(false)
+  const [showRatingModal, setShowRatingModal] = useState(false)
+  const [rating, setRating] = useState(0)
+  const [review, setReview] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [contractorImage, setContractorImage] = useState<string | null>(job.contractor_image || null)
+  const [homeownerConfirmed, setHomeownerConfirmed] = useState(job.homeowner_confirmed_complete || false)
+  const [contractorConfirmed, setContractorConfirmed] = useState(job.contractor_confirmed_complete || false)
+
+  // Fetch contractor profile image
+  useEffect(() => {
+    if (!job.contractor_id || contractorImage) return
+
+    const fetchContractorImage = async () => {
+      const { data } = await supabase
+        .from('pro_contractors')
+        .select('profile_image_url')
+        .eq('id', job.contractor_id)
+        .single()
+
+      if (data?.profile_image_url) {
+        setContractorImage(data.profile_image_url)
+      }
+    }
+
+    fetchContractorImage()
+  }, [job.contractor_id, contractorImage])
+
+  // Subscribe to contractor location updates
+  useEffect(() => {
+    if (!job.contractor_id) return
+
+    const channel = supabase
+      .channel(`contractor-tracking-${job.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'contractor_location_tracking',
+          filter: `job_id=eq.${job.id}`
+        },
+        (payload) => {
+          if (payload.new && 'latitude' in payload.new) {
+            const loc = payload.new as any
+            setContractorLocation({ lat: loc.latitude, lng: loc.longitude })
+            if (loc.eta_minutes) setEta(loc.eta_minutes)
+            if (loc.distance_to_job_meters) {
+              setDistance(`${(loc.distance_to_job_meters / 1609.34).toFixed(1)} mi`)
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    // Fetch initial location
+    const fetchInitialLocation = async () => {
+      const { data } = await supabase
+        .from('contractor_location_tracking')
+        .select('*')
+        .eq('job_id', job.id)
+        .eq('contractor_id', job.contractor_id)
+        .order('last_update_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (data) {
+        setContractorLocation({ lat: data.latitude, lng: data.longitude })
+        if (data.eta_minutes) setEta(data.eta_minutes)
+        if (data.distance_to_job_meters) {
+          setDistance(`${(data.distance_to_job_meters / 1609.34).toFixed(1)} mi`)
+        }
+      }
+    }
+
+    fetchInitialLocation()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [job.id, job.contractor_id])
+
+  // Subscribe to job status updates
+  useEffect(() => {
+    const channel = supabase
+      .channel(`job-status-${job.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'homeowner_jobs',
+          filter: `id=eq.${job.id}`
+        },
+        (payload) => {
+          if (payload.new) {
+            const updatedJob = payload.new as any
+            setJobStatus(updatedJob.status)
+            setHomeownerConfirmed(updatedJob.homeowner_confirmed_complete || false)
+            setContractorConfirmed(updatedJob.contractor_confirmed_complete || false)
+
+            // If contractor confirmed arrival
+            if (updatedJob.status === 'in_progress' && jobStatus === 'confirmed') {
+              triggerHaptic(ImpactStyle.Heavy)
+            }
+
+            // If both confirmed complete, show rating
+            if (updatedJob.homeowner_confirmed_complete && updatedJob.contractor_confirmed_complete) {
+              setShowRatingModal(true)
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [job.id, jobStatus])
+
+  // Calculate ETA with Mapbox Directions API
+  useEffect(() => {
+    const calculateETA = async () => {
+      if (!contractorLocation) return
+
+      try {
+        const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+        if (!MAPBOX_TOKEN) return
+
+        const response = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${contractorLocation.lng},${contractorLocation.lat};${userLocation[1]},${userLocation[0]}?overview=full&geometries=geojson&access_token=${MAPBOX_TOKEN}`
+        )
+        const data = await response.json()
+        if (data.routes?.[0]?.duration) {
+          const minutes = Math.ceil(data.routes[0].duration / 60)
+          setEta(minutes)
+        }
+        if (data.routes?.[0]?.distance) {
+          const miles = (data.routes[0].distance / 1609.34).toFixed(1)
+          setDistance(`${miles} mi`)
+        }
+      } catch (err) {
+        console.error('Error calculating ETA:', err)
+      }
+    }
+
+    if (jobStatus === 'confirmed') {
+      calculateETA()
+      const interval = setInterval(calculateETA, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [contractorLocation, userLocation, jobStatus])
+
+  // Show route on map
+  useEffect(() => {
+    if (contractorLocation && mapRef.current && jobStatus === 'confirmed') {
+      mapRef.current.showRoute(
+        contractorLocation.lat,
+        contractorLocation.lng,
+        userLocation[0],
+        userLocation[1]
+      )
+    }
+  }, [contractorLocation, userLocation, jobStatus])
+
+  // Build items for the map
+  const mapItems = useMemo(() => {
+    if (!contractorLocation) return []
+    return [{
+      id: 'contractor',
+      name: job.contractor_name || 'Contractor',
+      latitude: contractorLocation.lat,
+      longitude: contractorLocation.lng,
+      services: ['Contractor'],
+    }]
+  }, [contractorLocation, job.contractor_name])
+
+  // Handle job completion confirmation
+  const handleConfirmComplete = async () => {
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/payments/confirm-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: job.id,
+          userType: 'homeowner'
+        })
+      })
+
+      const data = await response.json()
+      if (data.success) {
+        await triggerHaptic(ImpactStyle.Heavy)
+        setShowCompleteModal(false)
+        setHomeownerConfirmed(true)
+
+        if (data.bothConfirmed) {
+          setShowRatingModal(true)
+        }
+      }
+    } catch (err) {
+      console.error('Error confirming completion:', err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Handle rating submission
+  const handleSubmitRating = async () => {
+    if (rating === 0) return
+
+    setSubmitting(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+
+      await supabase.from('contractor_reviews').insert({
+        contractor_id: job.contractor_id,
+        homeowner_id: user?.id,
+        job_id: job.id,
+        rating,
+        review: review.trim() || null
+      })
+
+      await triggerHaptic(ImpactStyle.Heavy)
+      setShowRatingModal(false)
+      onJobComplete?.()
+      onBack()
+    } catch (err) {
+      console.error('Error submitting rating:', err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Get status display
+  const getStatusInfo = () => {
+    switch (jobStatus) {
+      case 'confirmed':
+        return { text: 'Contractor On The Way', color: 'emerald' }
+      case 'in_progress':
+        return { text: 'Job In Progress', color: 'blue' }
+      default:
+        return { text: 'Tracking', color: 'gray' }
+    }
+  }
+
+  const statusInfo = getStatusInfo()
+
+  return (
+    <div className="fixed inset-0 bg-white z-50 flex flex-col">
+      {/* Map Section - Full screen */}
+      <div className="flex-1 relative">
+        <FindProMapbox
+          ref={mapRef}
+          items={mapItems}
+          radiusMiles={10}
+          searchCenter={userLocation}
+          fullscreen={true}
+          hideSearchButton={true}
+          hideControls={true}
+        />
+
+        {/* Back Button */}
+        <button
+          onClick={onBack}
+          className="absolute top-4 left-4 w-11 h-11 bg-white rounded-full shadow-lg flex items-center justify-center z-10 active:scale-95 transition-transform"
+          style={{ marginTop: 'env(safe-area-inset-top)' }}
+        >
+          <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+
+        {/* Live ETA Badge - Top center */}
+        {jobStatus === 'confirmed' && (
+          <div
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-10"
+            style={{ marginTop: 'env(safe-area-inset-top)' }}
+          >
+            <div className="bg-blue-600 rounded-full px-5 py-2.5 shadow-lg flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+              <span className="text-white font-bold text-[16px]">
+                {eta ? `${eta} min` : '...'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Status Badge for in_progress */}
+        {jobStatus === 'in_progress' && (
+          <div
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-10"
+            style={{ marginTop: 'env(safe-area-inset-top)' }}
+          >
+            <div className="bg-blue-600 rounded-full px-5 py-2.5 shadow-lg flex items-center gap-2">
+              <span className="text-lg">🔧</span>
+              <span className="text-white font-bold text-[16px]">Job In Progress</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Card - Contractor Info */}
+      <div
+        className="bg-white rounded-t-3xl shadow-2xl"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}
+      >
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-10 h-1 bg-gray-300 rounded-full" />
+        </div>
+
+        <div className="px-4 pb-4">
+          {/* Contractor Profile Row */}
+          <div className="flex items-center gap-4 mb-4">
+            {/* Profile Image */}
+            <div className="relative">
+              {contractorImage ? (
+                <img
+                  src={contractorImage}
+                  alt={job.contractor_name || 'Contractor'}
+                  className="w-16 h-16 rounded-full object-cover border-2 border-emerald-500"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center border-2 border-emerald-500">
+                  <span className="text-white font-bold text-2xl">
+                    {(job.contractor_name || 'C')[0].toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <div className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white" />
+            </div>
+
+            {/* Name and Status */}
+            <div className="flex-1">
+              <p className="text-gray-900 font-bold text-[18px]">{job.contractor_name || 'Contractor'}</p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <div className={`w-2 h-2 rounded-full ${jobStatus === 'in_progress' ? 'bg-blue-500' : 'bg-emerald-500'} animate-pulse`} />
+                <span className={`text-[13px] font-medium ${jobStatus === 'in_progress' ? 'text-blue-600' : 'text-emerald-600'}`}>
+                  {statusInfo.text}
+                </span>
+              </div>
+            </div>
+
+            {/* Chat Button */}
+            <button
+              onClick={onChat}
+              className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center active:scale-95 transition-transform"
+            >
+              <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Stats Row */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-blue-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">ETA</p>
+              <p className="text-blue-700 font-bold text-[20px]">
+                {jobStatus === 'in_progress' ? '—' : eta ? `${eta}m` : '...'}
+              </p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Distance</p>
+              <p className="text-gray-700 font-bold text-[20px]">
+                {jobStatus === 'in_progress' ? '—' : distance || '...'}
+              </p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl p-3 text-center">
+              <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Price</p>
+              <p className="text-emerald-700 font-bold text-[20px]">
+                ${job.estimated_cost?.toFixed(0) || '—'}
+              </p>
+            </div>
+          </div>
+
+          {/* Job Title */}
+          <div className="bg-gray-50 rounded-xl p-3 mb-4">
+            <p className="text-gray-500 text-[11px] uppercase tracking-wide mb-1">Job</p>
+            <p className="text-gray-900 font-semibold text-[15px]">{job.title}</p>
+          </div>
+
+          {/* Action Button based on status */}
+          {jobStatus === 'in_progress' && !homeownerConfirmed && (
+            <button
+              onClick={() => setShowCompleteModal(true)}
+              className="w-full py-4 rounded-xl font-bold text-[16px] text-white active:scale-98 transition-transform"
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+            >
+              Job Completed - Confirm
+            </button>
+          )}
+
+          {homeownerConfirmed && !contractorConfirmed && (
+            <div className="bg-amber-50 rounded-xl p-4 text-center">
+              <p className="text-amber-700 font-medium">Waiting for contractor to confirm completion...</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Job Complete Confirmation Modal */}
+      {showCompleteModal && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-[60]" onClick={() => setShowCompleteModal(false)} />
+          <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 bg-white rounded-2xl p-6 z-[60] max-w-md mx-auto">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Confirm Job Completion</h3>
+            <p className="text-gray-600 mb-6">
+              Are you satisfied with the work? Once both you and the contractor confirm, the payment will be released.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCompleteModal(false)}
+                className="flex-1 py-3 rounded-xl font-semibold text-gray-700 bg-gray-100"
+              >
+                Not Yet
+              </button>
+              <button
+                onClick={handleConfirmComplete}
+                disabled={submitting}
+                className="flex-1 py-3 rounded-xl font-semibold text-white bg-emerald-600 disabled:opacity-50"
+              >
+                {submitting ? 'Confirming...' : 'Yes, Complete'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Full-Screen Rating View */}
+      {showRatingModal && (
+        <div className="fixed inset-0 bg-white z-[60] flex flex-col">
+          {/* Header */}
+          <div
+            className="text-center pt-6 pb-4"
+            style={{ paddingTop: 'calc(env(safe-area-inset-top) + 24px)' }}
+          >
+            <div className="text-4xl mb-2">🎉</div>
+            <h2 className="text-[24px] font-bold text-gray-900">Job Complete!</h2>
+          </div>
+
+          {/* Contractor Profile - Centered */}
+          <div className="flex-1 flex flex-col items-center justify-center px-6">
+            {/* Profile Image */}
+            <div className="mb-6">
+              {contractorImage ? (
+                <img
+                  src={contractorImage}
+                  alt={job.contractor_name || 'Contractor'}
+                  className="w-32 h-32 rounded-full object-cover border-4 border-emerald-500 shadow-xl"
+                />
+              ) : (
+                <div className="w-32 h-32 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center border-4 border-emerald-500 shadow-xl">
+                  <span className="text-white font-bold text-5xl">
+                    {(job.contractor_name || 'C')[0].toUpperCase()}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Contractor Name */}
+            <h3 className="text-[22px] font-bold text-gray-900 mb-2">
+              {job.contractor_name || 'Contractor'}
+            </h3>
+            <p className="text-gray-500 text-[15px] mb-8">How was your experience?</p>
+
+            {/* Star Rating - Large */}
+            <div className="flex justify-center gap-4 mb-8">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  onClick={async () => {
+                    await triggerHaptic(ImpactStyle.Light)
+                    setRating(star)
+                  }}
+                  className="transition-transform active:scale-90"
+                >
+                  <svg
+                    className={`w-12 h-12 ${star <= rating ? 'text-amber-400' : 'text-gray-300'}`}
+                    fill={star <= rating ? 'currentColor' : 'none'}
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={star <= rating ? 0 : 1.5}
+                      d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"
+                    />
+                  </svg>
+                </button>
+              ))}
+            </div>
+
+            {/* Review Text - Optional */}
+            <div className="w-full max-w-sm">
+              <textarea
+                value={review}
+                onChange={(e) => setReview(e.target.value)}
+                placeholder="Write a review (optional)"
+                className="w-full p-4 bg-gray-50 border-0 rounded-2xl resize-none h-28 text-[16px] placeholder-gray-400 focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all"
+              />
+            </div>
+          </div>
+
+          {/* Bottom Button */}
+          <div
+            className="px-6 pb-6"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 24px)' }}
+          >
+            <button
+              onClick={handleSubmitRating}
+              disabled={rating === 0 || submitting}
+              className="w-full py-4 rounded-2xl font-bold text-[17px] text-white active:scale-[0.98] transition-transform disabled:opacity-50"
+              style={{ background: rating > 0 ? 'linear-gradient(135deg, #10b981, #059669)' : '#d1d5db' }}
+            >
+              {submitting ? 'Submitting...' : 'Confirm Review'}
+            </button>
+            {rating === 0 && (
+              <p className="text-center text-gray-400 text-[13px] mt-3">
+                Tap the stars to rate your experience
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Uber-style Bid Tracking Overlay
 interface Bid {
   id: string
@@ -538,7 +1462,7 @@ const CATEGORY_BUBBLES = [
 ]
 
 // Home Tab Content - Split view: Map on top half, Jobs with live bids below
-function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLocation, firstName, jobs, jobsLoading, activeJob, bids, bidsLoading, onAcceptBid, onDeclineBid, onCloseBidOverlay, user }: {
+function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLocation, firstName, jobs, jobsLoading, activeJob, bids, bidsLoading, onAcceptBid, onDeclineBid, onCloseBidOverlay, user, trackingJob, onOpenTracking }: {
   center: LatLng
   setCenter: (c: LatLng) => void
   filtered: any[]
@@ -554,6 +1478,8 @@ function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLoc
   onDeclineBid: (bid: Bid) => void
   onCloseBidOverlay: () => void
   user: any
+  trackingJob: TrackingJob | null
+  onOpenTracking: () => void
 }) {
   const router = useRouter()
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -1130,63 +2056,51 @@ function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLoc
                 </div>
               </div>
             </div>
-          ) : inProgressJob ? (
-            // In-progress job - Contractor tracking view
-            <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-2xl p-4 border border-emerald-200">
-              {/* Status Header */}
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-emerald-700 font-semibold text-[15px]">Contractor On The Way</span>
-              </div>
-
-              {/* Contractor Info */}
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-16 h-16 rounded-full bg-emerald-200 flex items-center justify-center">
-                  <span className="text-emerald-700 font-bold text-2xl">
-                    {(inProgressJob.contractor_name || 'C')[0].toUpperCase()}
+          ) : trackingJob ? (
+            // In-progress job - Track Contractor card (opens full-screen tracking view)
+            <button
+              onClick={onOpenTracking}
+              className="w-full bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-4 active:scale-98 transition-transform text-left"
+              style={{ boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)' }}
+            >
+              <div className="flex items-center gap-4">
+                {/* Contractor Avatar */}
+                <div className="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center">
+                  <span className="text-white font-bold text-xl">
+                    {(trackingJob.contractor_name || 'C')[0].toUpperCase()}
                   </span>
                 </div>
-                <div className="flex-1">
-                  <p className="text-gray-900 font-semibold text-[17px]">{inProgressJob.contractor_name || 'Contractor'}</p>
-                  <p className="text-gray-600 text-[13px]">{inProgressJob.title}</p>
-                </div>
-              </div>
 
-              {/* ETA Display */}
-              <div className="bg-white rounded-xl p-4 mb-4 flex items-center justify-between">
-                <div>
-                  <p className="text-gray-500 text-[12px] uppercase tracking-wide">Estimated Arrival</p>
-                  <p className="text-gray-900 font-bold text-[24px]">
-                    {inProgressJob.eta_minutes ? `${inProgressJob.eta_minutes} min` : 'Calculating...'}
-                  </p>
+                {/* Info */}
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                    <span className="text-white/90 text-[13px] font-medium">Contractor On The Way</span>
+                  </div>
+                  <p className="text-white font-semibold text-[17px]">{trackingJob.contractor_name || 'Contractor'}</p>
+                  <p className="text-white/80 text-[13px]">{trackingJob.title}</p>
                 </div>
-                <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center">
-                  <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+                {/* Track Button Arrow */}
+                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
                 </div>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-3">
-                <button
-                  onClick={() => router.push(`/jobs/${inProgressJob.id}`)}
-                  className="flex-1 py-3 rounded-xl font-semibold text-[15px] text-white active:scale-95 transition-transform"
-                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
-                >
-                  View Details
-                </button>
-                <button
-                  onClick={() => router.push(`/messages/${inProgressJob.contractor_id}`)}
-                  className="w-14 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center active:scale-95 transition-transform"
-                >
-                  <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                </button>
+              {/* Track Now Label */}
+              <div className="mt-3 pt-3 border-t border-white/20 flex items-center justify-center gap-2">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                <span className="text-white font-semibold text-[15px]">Track Live Location</span>
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
               </div>
-            </div>
+            </button>
           ) : !mostRecentPendingJob ? (
             // Empty state - no active jobs, show Post a Job
             <div className="text-center py-8">
@@ -1322,138 +2236,26 @@ function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLoc
         />
       )}
 
-      {/* Bid Detail Overlay - Shows when contractor bid is selected */}
-      {selectedBid && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setSelectedBid(null)}
-          />
-
-          {/* Bottom Sheet */}
-          <div
-            className="relative w-full bg-white rounded-t-3xl"
-            style={{
-              paddingBottom: 'calc(20px + env(safe-area-inset-bottom, 20px))',
-              animation: 'slideUp 0.3s ease-out'
-            }}
-          >
-            {/* Pull Handle */}
-            <div className="flex justify-center pt-3 pb-4">
-              <div className="w-10 h-1 rounded-full bg-gray-300" />
-            </div>
-
-            {/* Content */}
-            <div className="px-6">
-              {/* Contractor Info */}
-              <div className="flex items-center gap-4 mb-5">
-                {/* Large Avatar */}
-                <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center relative">
-                  <span className="text-emerald-700 font-bold text-[28px]">
-                    {(selectedBid.contractor_name || 'C')[0].toUpperCase()}
-                  </span>
-                  {selectedBid.contractor_rating && (
-                    <div className="absolute -bottom-1 -right-1 bg-white rounded-full px-2 py-1 border border-gray-200 flex items-center gap-1 shadow-sm">
-                      <span className="text-amber-400 text-[12px]">★</span>
-                      <span className="text-[12px] font-semibold text-gray-700">{selectedBid.contractor_rating.toFixed(1)}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Name and Info */}
-                <div className="flex-1">
-                  <h3 className="text-[20px] font-bold text-gray-900">
-                    {selectedBid.contractor_name || 'Contractor'}
-                  </h3>
-                  <div className="mt-1 space-y-1">
-                    {loadingDistance ? (
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin" />
-                        <span className="text-[13px] text-gray-500">Calculating distance...</span>
-                      </div>
-                    ) : (
-                      <>
-                        {bidDistance && (
-                          <div className="flex items-center gap-1.5 text-emerald-600">
-                            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                            </svg>
-                            <span className="text-[13px] font-medium">{bidDistance}</span>
-                          </div>
-                        )}
-                        {bidAddress && (
-                          <div className="flex items-center gap-1.5 text-gray-500">
-                            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                            </svg>
-                            <span className="text-[12px]">{bidAddress}</span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Bid Details Card */}
-              <div className="bg-gray-50 rounded-2xl p-4 mb-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[12px] text-gray-500 uppercase font-medium">Their Bid</p>
-                    <p className="text-[32px] font-bold text-gray-900">${selectedBid.bid_amount}</p>
-                  </div>
-                  {selectedBid.eta_minutes && (
-                    <div className="text-right">
-                      <p className="text-[12px] text-gray-500 uppercase font-medium">Can Arrive In</p>
-                      <p className="text-[24px] font-bold text-emerald-600">~{selectedBid.eta_minutes} min</p>
-                    </div>
-                  )}
-                </div>
-                {selectedBid.message && (
-                  <div className="mt-3 pt-3 border-t border-gray-200">
-                    <p className="text-[13px] text-gray-600">{selectedBid.message}</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    triggerHaptic()
-                    setSelectedBid(null)
-                    setBidDistance(null)
-                    setBidAddress(null)
-                  }}
-                  className="flex-1 py-4 rounded-xl font-semibold text-[16px] text-gray-700 bg-gray-100 active:scale-95 transition-transform"
-                >
-                  Decline
-                </button>
-                <button
-                  onClick={async () => {
-                    await triggerHaptic(ImpactStyle.Medium)
-                    // Open payment modal
-                    setShowPaymentModal(true)
-                  }}
-                  className="flex-1 py-4 rounded-xl font-semibold text-[16px] text-white active:scale-95 transition-transform"
-                  style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
-                >
-                  Accept & Pay
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Animation styles */}
-          <style jsx>{`
-            @keyframes slideUp {
-              from { transform: translateY(100%); }
-              to { transform: translateY(0); }
-            }
-          `}</style>
-        </div>
+      {/* Full-Screen Bid Profile View - Shows when contractor bid is selected */}
+      {selectedBid && !showPaymentModal && (
+        <ContractorBidProfileView
+          bid={selectedBid}
+          userLocation={center}
+          onClose={() => {
+            setSelectedBid(null)
+            setBidDistance(null)
+            setBidAddress(null)
+          }}
+          onAccept={() => {
+            // Open payment modal
+            setShowPaymentModal(true)
+          }}
+          onDecline={() => {
+            setSelectedBid(null)
+            setBidDistance(null)
+            setBidAddress(null)
+          }}
+        />
       )}
 
       {/* Stripe Payment Modal */}
@@ -1467,13 +2269,18 @@ function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLoc
           contractorName={selectedBid.contractor_name || 'Contractor'}
           jobTitle={mostRecentPendingJob.title}
           homeownerId={user.id}
-          onPaymentSuccess={() => {
+          onPaymentSuccess={async () => {
+            // Payment succeeded - now accept the bid
+            await triggerHaptic(ImpactStyle.Heavy)
+
+            // Accept the bid (updates direct_offers and homeowner_jobs)
+            onAcceptBid(selectedBid)
+
+            // Close modal and clear state
             setShowPaymentModal(false)
             setSelectedBid(null)
             setBidDistance(null)
             setBidAddress(null)
-            // Refresh jobs to update status
-            triggerHaptic(ImpactStyle.Heavy)
           }}
         />
       )}
@@ -1482,12 +2289,21 @@ function HomeTab({ center, setCenter, filtered, fetchingLocation, setFetchingLoc
 }
 
 // Jobs Tab Content - Connected to real database
-function JobsTab({ jobs, loading }: { jobs: HomeownerJob[]; loading: boolean }) {
+function JobsTab({ jobs, loading, onOpenTracking }: {
+  jobs: HomeownerJob[]
+  loading: boolean
+  onOpenTracking?: (jobId: string) => void
+}) {
   const router = useRouter()
 
-  const handleJobPress = async (jobId: string) => {
+  const handleJobPress = async (job: HomeownerJob) => {
     await triggerHaptic()
-    router.push(`/jobs/${jobId}`)
+    // For in_progress or confirmed jobs, open tracking view
+    if ((job.status === 'in_progress' || job.status === 'confirmed') && onOpenTracking) {
+      onOpenTracking(job.id)
+    } else {
+      router.push(`/jobs/${job.id}`)
+    }
   }
 
   const getStatusColor = (status: string) => {
@@ -1578,10 +2394,11 @@ function JobsTab({ jobs, loading }: { jobs: HomeownerJob[]; loading: boolean }) 
                 if (days < 7) return `${days}d ago`
                 return createdDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               })()
+              const isTrackable = job.status === 'in_progress' || job.status === 'confirmed'
               return (
                 <button
                   key={job.id}
-                  onClick={() => handleJobPress(job.id)}
+                  onClick={() => handleJobPress(job)}
                   className="w-full bg-white rounded-xl p-4 text-left active:scale-[0.98] transition-transform"
                   style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}
                 >
@@ -1654,9 +2471,16 @@ function JobsTab({ jobs, loading }: { jobs: HomeownerJob[]; loading: boolean }) 
                         </span>
                       )}
                     </div>
-                    <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
+                    {isTrackable ? (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 rounded-full">
+                        <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                        <span className="text-[11px] font-semibold text-white">Track Live</span>
+                      </div>
+                    ) : (
+                      <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    )}
                   </div>
                 </button>
               )
@@ -2705,6 +3529,10 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
   const [bids, setBids] = useState<Bid[]>([])
   const [bidsLoading, setBidsLoading] = useState(false)
 
+  // Contractor tracking view state - shows full-screen tracking when contractor is on the way
+  const [showTrackingView, setShowTrackingView] = useState(false)
+  const [trackingJob, setTrackingJob] = useState<TrackingJob | null>(null)
+
   // Initialize native plugins
   useEffect(() => {
     const initNative = async () => {
@@ -2864,6 +3692,140 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
     }
   }, [activeJob, user])
 
+  // Check for in-progress jobs and fetch contractor info for tracking
+  useEffect(() => {
+    const checkInProgressJobs = async () => {
+      if (!jobs || jobs.length === 0) return
+
+      // Find any in-progress or confirmed job
+      const inProgressJob = jobs.find(
+        (job) => (job.status === 'in_progress' || job.status === 'confirmed') && job.contractor_id
+      )
+
+      if (inProgressJob && inProgressJob.contractor_id) {
+        // Fetch contractor details for the tracking view
+        const { data: contractorData } = await supabase
+          .from('user_profiles')
+          .select('name')
+          .eq('id', inProgressJob.contractor_id)
+          .single()
+
+        // Set up tracking job with contractor info
+        const trackingJobData: TrackingJob = {
+          ...inProgressJob,
+          contractor_name: contractorData?.name || 'Contractor'
+        }
+
+        setTrackingJob(trackingJobData)
+      } else {
+        // No in-progress job, clear tracking state
+        setTrackingJob(null)
+        setShowTrackingView(false)
+      }
+    }
+
+    checkInProgressJobs()
+  }, [jobs])
+
+  // Handler to open tracking view
+  const handleOpenTracking = () => {
+    if (trackingJob) {
+      setShowTrackingView(true)
+    }
+  }
+
+  // Handler to open tracking view for a specific job (from Jobs tab)
+  const handleOpenTrackingForJob = async (jobId: string) => {
+    // If it's the current tracking job, just open the view
+    if (trackingJob?.id === jobId) {
+      setShowTrackingView(true)
+      return
+    }
+
+    // Otherwise, fetch the job data and set it as the tracking job
+    try {
+      const { data: jobData, error: jobError } = await supabase
+        .from('homeowner_jobs')
+        .select('*, accepted_bid_id')
+        .eq('id', jobId)
+        .single()
+
+      if (jobError || !jobData) {
+        console.error('Error fetching job for tracking:', jobError)
+        showGlobalToast('Could not load job details', 'error')
+        return
+      }
+
+      // Get contractor info - try accepted_bid_id first, then look for accepted bid
+      let contractorId: string | null = null
+
+      if (jobData.accepted_bid_id) {
+        const { data: bidData } = await supabase
+          .from('job_bids')
+          .select('contractor_id')
+          .eq('id', jobData.accepted_bid_id)
+          .single()
+        contractorId = bidData?.contractor_id || null
+      }
+
+      // Fallback: find accepted bid for this job
+      if (!contractorId) {
+        const { data: acceptedBid } = await supabase
+          .from('job_bids')
+          .select('contractor_id')
+          .eq('job_id', jobId)
+          .eq('status', 'accepted')
+          .single()
+        contractorId = acceptedBid?.contractor_id || null
+      }
+
+      if (!contractorId) {
+        console.error('No contractor found for job:', jobId)
+        showGlobalToast('No contractor assigned to this job yet', 'error')
+        return
+      }
+
+      const { data: contractorData } = await supabase
+        .from('pro_contractors')
+        .select('name, business_name, profile_image_url')
+        .eq('id', contractorId)
+        .single()
+
+      const newTrackingJob: TrackingJob = {
+        id: jobData.id,
+        title: jobData.title,
+        status: jobData.status,
+        contractor_id: contractorId,
+        contractor_name: contractorData?.business_name || contractorData?.name || 'Contractor',
+        contractor_image: contractorData?.profile_image_url,
+        address: jobData.address,
+        estimated_cost: jobData.final_cost || jobData.estimated_cost,
+        homeowner_confirmed_complete: jobData.homeowner_confirmed_complete,
+        contractor_confirmed_complete: jobData.contractor_confirmed_complete
+      }
+
+      setTrackingJob(newTrackingJob)
+      setShowTrackingView(true)
+    } catch (err) {
+      console.error('Error opening tracking for job:', err)
+      showGlobalToast('Failed to open tracking', 'error')
+    }
+  }
+
+  // Handler to close tracking view
+  const handleCloseTracking = () => {
+    setShowTrackingView(false)
+  }
+
+  const router = useRouter()
+
+  // Handler to open chat from tracking view
+  const handleTrackingChat = () => {
+    if (trackingJob?.contractor_id) {
+      router.push(`/messages/${trackingJob.contractor_id}`)
+    }
+  }
+
   // Handler for accepting a bid
   const handleAcceptBid = async (bid: Bid) => {
     if (!activeJob) return
@@ -2967,6 +3929,21 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
   // Main app view with bottom tabs
   return (
     <IOSErrorBoundary>
+      {/* Full-screen Contractor Tracking View - Shows when contractor is on the way */}
+      {showTrackingView && trackingJob && (
+        <ContractorTrackingView
+          job={trackingJob}
+          userLocation={center}
+          onBack={handleCloseTracking}
+          onChat={handleTrackingChat}
+          onJobComplete={() => {
+            // Close tracking view and let the jobs list refresh via real-time subscription
+            setShowTrackingView(false)
+            setTrackingJob(null)
+          }}
+        />
+      )}
+
       <div className="fixed inset-0 bg-gray-50 flex flex-col">
         {/* Tab Content */}
         {activeTab === 'home' && (
@@ -2986,9 +3963,17 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
             onDeclineBid={handleDeclineBid}
             onCloseBidOverlay={() => setActiveJob(null)}
             user={user}
+            trackingJob={trackingJob}
+            onOpenTracking={handleOpenTracking}
           />
         )}
-        {activeTab === 'jobs' && <JobsTab jobs={jobs} loading={jobsLoading} />}
+        {activeTab === 'jobs' && (
+          <JobsTab
+            jobs={jobs}
+            loading={jobsLoading}
+            onOpenTracking={handleOpenTrackingForJob}
+          />
+        )}
         {activeTab === 'messages' && (
           <MessagesTab
             conversations={conversations}

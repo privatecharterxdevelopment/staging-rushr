@@ -15,11 +15,11 @@ const supabase = createClient(
  */
 export async function POST(request: NextRequest) {
   try {
-    const { paymentHoldId, userId, userType } = await request.json()
+    const { paymentHoldId, jobId, userId, userType } = await request.json()
 
-    if (!paymentHoldId || !userId || !userType) {
+    if ((!paymentHoldId && !jobId) || !userType) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing required fields (need paymentHoldId or jobId, and userType)' },
         { status: 400 }
       )
     }
@@ -31,30 +31,50 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 1. Get payment hold
-    const { data: paymentHold, error: holdError } = await supabase
-      .from('payment_holds')
-      .select('*')
-      .eq('id', paymentHoldId)
-      .or(`homeowner_id.eq.${userId},contractor_id.eq.${userId}`)
-      .single()
+    // 1. Get payment hold (by ID or by jobId)
+    let paymentHold: any = null
+    let holdError: any = null
+
+    if (paymentHoldId) {
+      const result = await supabase
+        .from('payment_holds')
+        .select('*')
+        .eq('id', paymentHoldId)
+        .single()
+      paymentHold = result.data
+      holdError = result.error
+    } else if (jobId) {
+      // Look up by job ID - get the most recent active payment hold
+      const result = await supabase
+        .from('payment_holds')
+        .select('*')
+        .eq('job_id', jobId)
+        .eq('status', 'captured')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+      paymentHold = result.data
+      holdError = result.error
+    }
 
     if (holdError || !paymentHold) {
       return NextResponse.json(
-        { error: 'Payment hold not found or access denied' },
+        { error: 'Payment hold not found. Ensure payment has been captured for this job.' },
         { status: 404 }
       )
     }
 
-    // Verify user type matches
-    if (
-      (userType === 'homeowner' && paymentHold.homeowner_id !== userId) ||
-      (userType === 'contractor' && paymentHold.contractor_id !== userId)
-    ) {
-      return NextResponse.json(
-        { error: 'User type mismatch' },
-        { status: 403 }
-      )
+    // Optional: Verify user ID if provided
+    if (userId) {
+      if (
+        (userType === 'homeowner' && paymentHold.homeowner_id !== userId) ||
+        (userType === 'contractor' && paymentHold.contractor_id !== userId)
+      ) {
+        return NextResponse.json(
+          { error: 'User type mismatch - you are not authorized for this action' },
+          { status: 403 }
+        )
+      }
     }
 
     if (paymentHold.status !== 'captured') {

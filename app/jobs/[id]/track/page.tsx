@@ -136,11 +136,14 @@ export default function TrackContractorPage() {
       if (!user || !jobId) return
 
       try {
+        // Check if ID is a number (job_number) or UUID (backward compatibility)
+        const isJobNumber = /^\d+$/.test(jobId)
+
         // Fetch job
         const { data: jobData, error: jobError } = await supabase
           .from('homeowner_jobs')
           .select('*')
-          .eq('id', jobId)
+          .eq(isJobNumber ? 'job_number' : 'id', jobId)
           .eq('homeowner_id', user.id)
           .single()
 
@@ -152,11 +155,14 @@ export default function TrackContractorPage() {
 
         setJob(jobData)
 
+        // Use the actual job UUID for subsequent queries
+        const actualJobId = jobData.id
+
         // Fetch accepted bid to get contractor
         const { data: bidData, error: bidError } = await supabase
           .from('job_bids')
           .select('contractor_id')
-          .eq('job_id', jobId)
+          .eq('job_id', actualJobId)
           .eq('status', 'accepted')
           .single()
 
@@ -182,8 +188,8 @@ export default function TrackContractorPage() {
         setContractor(contractorData)
         setLoading(false)
 
-        // Subscribe to location updates
-        subscribeToLocation(bidData.contractor_id, jobData)
+        // Subscribe to location updates using the actual job UUID
+        subscribeToLocation(bidData.contractor_id, jobData, actualJobId)
       } catch (err: any) {
         console.error('Error fetching data:', err)
         setError(err.message || 'Failed to load tracking data')
@@ -194,16 +200,16 @@ export default function TrackContractorPage() {
     fetchData()
   }, [user, jobId])
 
-  const subscribeToLocation = (contractorId: string, jobData: Job) => {
+  const subscribeToLocation = (contractorId: string, jobData: Job, actualJobId: string) => {
     const channel = supabase
-      .channel(`contractor-location-${jobId}`)
+      .channel(`contractor-location-${actualJobId}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
           table: 'contractor_location_tracking',
-          filter: `job_id=eq.${jobId}`
+          filter: `job_id=eq.${actualJobId}`
         },
         (payload) => {
           console.log('[TRACKING] Location update:', payload)
@@ -217,18 +223,18 @@ export default function TrackContractorPage() {
       .subscribe()
 
     // Fetch initial location
-    fetchInitialLocation(contractorId, jobData)
+    fetchInitialLocation(contractorId, jobData, actualJobId)
 
     return () => {
       supabase.removeChannel(channel)
     }
   }
 
-  const fetchInitialLocation = async (contractorId: string, jobData: Job) => {
+  const fetchInitialLocation = async (contractorId: string, jobData: Job, actualJobId: string) => {
     const { data, error } = await supabase
       .from('contractor_location_tracking')
       .select('*')
-      .eq('job_id', jobId)
+      .eq('job_id', actualJobId)
       .eq('contractor_id', contractorId)
       .order('last_update_at', { ascending: false })
       .limit(1)
