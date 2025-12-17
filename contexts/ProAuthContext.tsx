@@ -294,7 +294,7 @@ export function ProAuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false
-      subscription.unsubscribe()
+      supabase.removeChannel(subscription)
     }
   }, [])
 
@@ -346,7 +346,7 @@ export function ProAuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       console.log('[PRO-AUTH] Cleaning up contractor profile subscription')
-      contractorSubscription.unsubscribe()
+      supabase.removeChannel(contractorSubscription)
     }
   }, [user?.id])
 

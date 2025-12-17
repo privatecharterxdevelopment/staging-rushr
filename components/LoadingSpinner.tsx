@@ -131,26 +131,11 @@ function IOSNativeLoader({ size = 'lg', text }: { size?: 'sm' | 'md' | 'lg' | 'x
 
 export default function LoadingSpinner({
   size = 'md',
-  text = 'Loading...',
+  text,
   fullScreen = false,
-  className = '',
-  color = 'blue'
+  className = ''
 }: LoadingSpinnerProps) {
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform()
-
-  const sizeClasses = {
-    sm: 'w-8 h-8',
-    md: 'w-12 h-12',
-    lg: 'w-16 h-16',
-    xl: 'w-24 h-24'
-  }
-
-  const textSizes = {
-    sm: 'text-sm',
-    md: 'text-base',
-    lg: 'text-lg',
-    xl: 'text-xl'
-  }
 
   // iOS Native: Green gradient fullscreen with pulsing Rushr logo (matches splash)
   if (isNative) {
@@ -175,57 +160,33 @@ export default function LoadingSpinner({
     )
   }
 
-  // Web: Original behavior with text
-  const spinner = (
-    <div className={`flex flex-col items-center justify-center gap-3 ${className}`}>
-      <img
-        src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/RushrLogoAnimation.gif"
-        alt="Loading..."
-        className={`${sizeClasses[size]} object-contain`}
-      />
-      {text && (
-        <p className={`${textSizes[size]} text-gray-600 font-medium`}>
-          {text}
-        </p>
-      )}
-    </div>
-  )
-
+  // Web: Use RushrLoader (logo with spinner ring) - same as iOS just different background
   if (fullScreen) {
     return (
-      <div className="fixed inset-0 bg-white bg-opacity-80 backdrop-blur-sm flex items-center justify-center z-50">
-        {spinner}
-      </div>
-    )
-  }
-
-  return spinner
-}
-
-// Inline loading spinner for buttons
-export function ButtonSpinner({ className = 'w-5 h-5' }: { className?: string }) {
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform()
-
-  if (isNative) {
-    // iOS: Simple white spinner for buttons
-    return (
-      <div className={`${className} relative`}>
-        <div className="absolute inset-0 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+      <div className="fixed inset-0 bg-white flex items-center justify-center z-50">
+        <RushrLoader size={size} text={text} />
       </div>
     )
   }
 
   return (
-    <img
-      src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/RushrLogoAnimation.gif"
-      alt="Loading..."
-      className={`${className} object-contain`}
-    />
+    <div className={`flex items-center justify-center ${className}`}>
+      <RushrLoader size={size} text={text} />
+    </div>
+  )
+}
+
+// Inline loading spinner for buttons - simple spinner ring
+export function ButtonSpinner({ className = 'w-5 h-5' }: { className?: string }) {
+  return (
+    <div className={`${className} relative`}>
+      <div className="absolute inset-0 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+    </div>
   )
 }
 
 // Page loading wrapper - iOS native aware
-export function PageLoading({ children, isLoading, loadingText = 'Loading...' }: {
+export function PageLoading({ children, isLoading, loadingText }: {
   children: React.ReactNode
   isLoading: boolean
   loadingText?: string
@@ -245,9 +206,10 @@ export function PageLoading({ children, isLoading, loadingText = 'Loading...' }:
       )
     }
 
+    // Web: White background with RushrLoader
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingSpinner size="lg" text={loadingText} />
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <RushrLoader size="lg" text={loadingText} />
       </div>
     )
   }

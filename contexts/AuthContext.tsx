@@ -196,7 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false
       clearTimeout(loadingTimeout)
-      subscription.unsubscribe()
+      supabase.removeChannel(subscription)
     }
   }, [router])
 

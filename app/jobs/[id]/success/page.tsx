@@ -162,7 +162,7 @@ export default function JobSuccessPage() {
       .subscribe()
 
     return () => {
-      subscription.unsubscribe()
+      supabase.removeChannel(subscription)
     }
   }, [job?.id])
 

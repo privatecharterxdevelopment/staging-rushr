@@ -2692,7 +2692,7 @@ function NotificationsTab({ userId }: { userId: string }) {
       .subscribe()
 
     return () => {
-      subscription.unsubscribe()
+      supabase.removeChannel(subscription)
     }
   }, [userId])
 
@@ -3743,8 +3743,8 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
     fetchAllBids()
 
     return () => {
-      jobBidsSubscription.unsubscribe()
-      directOffersSubscription.unsubscribe()
+      supabase.removeChannel(jobBidsSubscription)
+      supabase.removeChannel(directOffersSubscription)
     }
   }, [activeJob, user])
 

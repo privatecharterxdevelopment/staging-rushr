@@ -7,8 +7,6 @@ import { useAuth } from '../../../contexts/AuthContext'
 import OfferJobModal from '../../../components/OfferJobModal'
 import { openAuth } from '../../../components/AuthModal'
 import { getCurrentLocation } from '../../../lib/nativeLocation'
-import mapboxgl from 'mapbox-gl'
-import 'mapbox-gl/dist/mapbox-gl.css'
 import {
   MapPin,
   Star,
@@ -24,9 +22,14 @@ import {
 import { safeBack } from '../../../lib/safeBack'
 import { Capacitor } from '@capacitor/core'
 
-// Initialize Mapbox
+// Dynamically import Mapbox to avoid SSR issues
+let mapboxgl: any = null
 if (typeof window !== 'undefined') {
-  mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
+  import('mapbox-gl').then((module) => {
+    mapboxgl = module.default
+    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
+  })
+  import('mapbox-gl/dist/mapbox-gl.css')
 }
 
 interface ContractorProfile {
@@ -77,11 +80,24 @@ export default function ContractorProfilePage() {
 
   // Map refs
   const mapContainer = useRef<HTMLDivElement>(null)
-  const map = useRef<mapboxgl.Map | null>(null)
-  const contractorMarker = useRef<mapboxgl.Marker | null>(null)
-  const userMarker = useRef<mapboxgl.Marker | null>(null)
+  const map = useRef<any>(null)
+  const contractorMarker = useRef<any>(null)
+  const userMarker = useRef<any>(null)
+  const [mapboxReady, setMapboxReady] = useState(false)
 
+  // Detect iOS native platform - check immediately for correct initial render
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform()
+
+  // Load mapbox dynamically
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      import('mapbox-gl').then((module) => {
+        mapboxgl = module.default
+        mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
+        setMapboxReady(true)
+      })
+    }
+  }, [])
 
   // Fetch contractor profile
   useEffect(() => {
@@ -160,95 +176,105 @@ export default function ContractorProfilePage() {
     fetchUserLocation()
   }, [])
 
-  // Initialize map when contractor data is available
+  // Initialize map when contractor data is available and mapbox is loaded
   useEffect(() => {
-    if (!mapContainer.current || !contractor || map.current) return
+    if (!mapContainer.current || !contractor || map.current || !mapboxReady || !mapboxgl) return
     if (!process.env.NEXT_PUBLIC_MAPBOX_TOKEN) return
 
     // Use contractor location or default to NYC
     const contractorLat = contractor.latitude || 40.7128
     const contractorLng = contractor.longitude || -74.006
 
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
-      center: [contractorLng, contractorLat],
-      zoom: 13,
-      attributionControl: false
-    })
+    try {
+      map.current = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: 'mapbox://styles/mapbox/streets-v12',
+        center: [contractorLng, contractorLat],
+        zoom: 13,
+        attributionControl: false
+      })
 
-    // Add contractor marker (truck icon)
-    const contractorEl = document.createElement('div')
-    contractorEl.innerHTML = `
-      <div style="
-        width: 44px;
-        height: 44px;
-        background: linear-gradient(135deg, #10b981, #059669);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
-        border: 3px solid white;
-      ">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-          <path d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
-        </svg>
-      </div>
-    `
-
-    contractorMarker.current = new mapboxgl.Marker(contractorEl)
-      .setLngLat([contractorLng, contractorLat])
-      .addTo(map.current)
-
-    return () => {
-      map.current?.remove()
-      map.current = null
-    }
-  }, [contractor])
-
-  // Add user marker and calculate route when user location is available
-  useEffect(() => {
-    if (!map.current || !userLocation || !contractor) return
-
-    const contractorLat = contractor.latitude || 40.7128
-    const contractorLng = contractor.longitude || -74.006
-
-    // Add user marker (home icon)
-    if (!userMarker.current) {
-      const userEl = document.createElement('div')
-      userEl.innerHTML = `
+      // Add contractor marker (truck icon)
+      const contractorEl = document.createElement('div')
+      contractorEl.innerHTML = `
         <div style="
-          width: 40px;
-          height: 40px;
-          background: #3b82f6;
+          width: 44px;
+          height: 44px;
+          background: linear-gradient(135deg, #10b981, #059669);
           border-radius: 50%;
           display: flex;
           align-items: center;
           justify-content: center;
-          box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
           border: 3px solid white;
         ">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+            <path d="M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
           </svg>
         </div>
       `
 
-      userMarker.current = new mapboxgl.Marker(userEl)
-        .setLngLat([userLocation.lng, userLocation.lat])
+      contractorMarker.current = new mapboxgl.Marker(contractorEl)
+        .setLngLat([contractorLng, contractorLat])
         .addTo(map.current)
+    } catch (error) {
+      console.error('[ContractorProfile] Error initializing map:', error)
     }
 
-    // Fit map bounds to show both markers
-    const bounds = new mapboxgl.LngLatBounds()
-    bounds.extend([contractorLng, contractorLat])
-    bounds.extend([userLocation.lng, userLocation.lat])
-    map.current.fitBounds(bounds, { padding: 80, maxZoom: 14 })
+    return () => {
+      if (map.current) {
+        map.current.remove()
+        map.current = null
+      }
+    }
+  }, [contractor, mapboxReady])
 
-    // Fetch driving directions and draw route
-    fetchRoute(contractorLat, contractorLng, userLocation.lat, userLocation.lng)
-  }, [userLocation, contractor])
+  // Add user marker and calculate route when user location is available
+  useEffect(() => {
+    if (!map.current || !userLocation || !contractor || !mapboxgl) return
+
+    const contractorLat = contractor.latitude || 40.7128
+    const contractorLng = contractor.longitude || -74.006
+
+    try {
+      // Add user marker (home icon)
+      if (!userMarker.current) {
+        const userEl = document.createElement('div')
+        userEl.innerHTML = `
+          <div style="
+            width: 40px;
+            height: 40px;
+            background: #3b82f6;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+            border: 3px solid white;
+          ">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+              <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+            </svg>
+          </div>
+        `
+
+        userMarker.current = new mapboxgl.Marker(userEl)
+          .setLngLat([userLocation.lng, userLocation.lat])
+          .addTo(map.current)
+      }
+
+      // Fit map bounds to show both markers
+      const bounds = new mapboxgl.LngLatBounds()
+      bounds.extend([contractorLng, contractorLat])
+      bounds.extend([userLocation.lng, userLocation.lat])
+      map.current.fitBounds(bounds, { padding: 80, maxZoom: 14 })
+
+      // Fetch driving directions and draw route
+      fetchRoute(contractorLat, contractorLng, userLocation.lat, userLocation.lng)
+    } catch (error) {
+      console.error('[ContractorProfile] Error adding user marker:', error)
+    }
+  }, [userLocation, contractor, mapboxReady])
 
   // Fetch route from Mapbox Directions API
   const fetchRoute = async (
@@ -277,7 +303,7 @@ export default function ContractorProfilePage() {
         // Draw route on map
         if (map.current && map.current.getSource('route')) {
           // Update existing source
-          ;(map.current.getSource('route') as mapboxgl.GeoJSONSource).setData(route.geometry)
+          ;(map.current.getSource('route') as any).setData(route.geometry)
         } else if (map.current) {
           // Add new source and layer
           map.current.on('load', () => {
