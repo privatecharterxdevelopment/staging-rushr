@@ -7,9 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-11-20.acacia'
-})
 
 /**
  * POST /api/stripe/customer/save-card
@@ -46,7 +43,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       // Create Stripe customer
-      const customer = await stripe.customers.create({
+      const customer = await getStripe().customers.create({
         email: userProfile?.email,
         name: userProfile?.name,
         metadata: {
@@ -67,7 +64,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Attach payment method to customer (if not already attached)
     try {
-      await stripe.paymentMethods.attach(paymentMethodId, {
+      await getStripe().paymentMethods.attach(paymentMethodId, {
         customer: stripeCustomerId
       })
     } catch (err: any) {
@@ -79,7 +76,7 @@ export async function POST(request: NextRequest) {
 
     // 3. Set as default payment method if requested
     if (setAsDefault) {
-      await stripe.customers.update(stripeCustomerId, {
+      await getStripe().customers.update(stripeCustomerId, {
         invoice_settings: {
           default_payment_method: paymentMethodId
         }
@@ -139,7 +136,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Detach payment method from Stripe
-    await stripe.paymentMethods.detach(paymentMethodId)
+    await getStripe().paymentMethods.detach(paymentMethodId)
 
     // If this was the default, clear it
     if (customer.default_payment_method_id === paymentMethodId) {

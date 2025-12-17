@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import Stripe from 'stripe'
+import { getStripe } from '../../../../lib/stripe'
 import { notifyPaymentCompleted } from '../../../../lib/emailService'
 import { sendPaymentCompletedSMSHomeowner, sendPaymentCompletedSMSContractor } from '../../../../lib/smsService'
 
@@ -8,13 +8,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-// Initialize Stripe only if key is available
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2024-11-20.acacia'
-    })
-  : null
 
 /**
  * POST /api/payments/capture
@@ -62,7 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Capture the payment intent
-    const paymentIntent = await stripe.paymentIntents.capture(
+    const paymentIntent = await getStripe().paymentIntents.capture(
       paymentHold.stripe_payment_intent_id
     )
 

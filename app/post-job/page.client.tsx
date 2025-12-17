@@ -924,15 +924,12 @@ export default function PostJobInner({ userId }: Props) {
       return
     }
 
+    // Set sending state FIRST to show loading indicator
     setSending(true)
+    console.log('[SUBMIT] Starting job submission, sending=true')
 
     try {
       console.log('Submitting emergency job to database...')
-
-      // Import supabase
-      const { supabase } = await import('../../lib/supabaseClient')
-
-      console.log({ supabase })
 
       // Auto-generate title from emergency type
       const emergencyTypeLabels: Record<string, string> = {
@@ -943,14 +940,21 @@ export default function PostJobInner({ userId }: Props) {
         'water-damage': 'Water Damage Emergency',
         'locksmith': 'Lockout Emergency',
         'appliance': 'Appliance Emergency',
+        'battery': 'Dead Battery Emergency',
+        'tire': 'Flat Tire Emergency',
+        'lockout': 'Car Lockout Emergency',
+        'tow': 'Towing Emergency',
+        'fuel': 'Out of Fuel Emergency',
+        'mechanic': 'Breakdown Emergency',
+        'other': 'Other Emergency',
       }
-      const autoTitle = emergencyTypeLabels[emergencyType] || `${category} Emergency`
+      const autoTitle = emergencyTypeLabels[emergencyType] || `${category || 'Home'} Emergency`
 
       // Prepare job data
       const jobData = {
         title: autoTitle,
         description: details || autoTitle,
-        category: emergencyType || category,
+        category: emergencyType || category || 'other',
         priority: 'emergency', // All post-job submissions are emergency
         status: 'pending', // Waiting for contractors to accept
         address: address,
@@ -965,7 +969,7 @@ export default function PostJobInner({ userId }: Props) {
         requested_contractor_name: !sendAll && selectedContractor ? selectedContractor.name : null,
       }
 
-      console.log('Job data:', jobData)
+      console.log('[SUBMIT] Job data prepared:', jobData)
 
       // Insert job into database
       const { data: insertedJob, error } = await supabase
@@ -973,23 +977,25 @@ export default function PostJobInner({ userId }: Props) {
         .insert([jobData])
         .select()
         .single()
-      
+
       if (error) {
-        console.error('Error creating job:', error)
-        alert('Failed to submit emergency request. Please try again.')
+        console.error('[SUBMIT] Error creating job:', error)
+        setErrorPopup('Failed to submit emergency request. Please try again.')
         setSending(false)
         return
       }
 
-      console.log('Job created successfully:', insertedJob)
+      console.log('[SUBMIT] Job created successfully:', insertedJob)
 
       // Redirect to job success page with real-time bid notifications
-      setSending(false)
-      router.push(`/jobs/${insertedJob.job_number || insertedJob.id}/success`)
+      // Don't set sending to false before redirect - keep the loading state
+      const jobId = insertedJob.job_number || insertedJob.id
+      console.log('[SUBMIT] Redirecting to:', `/jobs/${jobId}/success`)
+      router.push(`/jobs/${jobId}/success`)
 
     } catch (err) {
-      console.error('Error submitting job:', err)
-      alert('Failed to submit emergency request. Please try again.')
+      console.error('[SUBMIT] Error submitting job:', err)
+      setErrorPopup('Failed to submit emergency request. Please try again.')
       setSending(false)
     }
   }
@@ -999,6 +1005,39 @@ export default function PostJobInner({ userId }: Props) {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <TopProgress active={sending} />
+
+        {/* Full-screen sending overlay - Same style as splash */}
+        {sending && (
+          <div
+            className="fixed inset-0 z-[100] flex flex-col items-center justify-center"
+            style={{ background: 'linear-gradient(160deg, #10b981 0%, #059669 50%, #047857 100%)' }}
+          >
+            <div className="relative">
+              <div
+                className="absolute inset-0 w-24 h-24 rounded-3xl"
+                style={{
+                  background: 'rgba(255,255,255,0.2)',
+                  animation: 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite'
+                }}
+              />
+              <div className="relative w-24 h-24 bg-white rounded-3xl flex items-center justify-center shadow-2xl p-3">
+                <img
+                  src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/Rushr%20Logo%20Vector.svg"
+                  alt="Rushr"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            </div>
+            <p className="text-white font-semibold text-lg mt-6">Submitting Request...</p>
+            <p className="text-white/70 text-sm mt-1">Finding available pros in your area</p>
+            <style jsx>{`
+              @keyframes ping {
+                0% { transform: scale(1); opacity: 0.8; }
+                75%, 100% { transform: scale(1.3); opacity: 0; }
+              }
+            `}</style>
+          </div>
+        )}
 
         {/* iOS Native Header with back button - uses safe-area-inset-top */}
         <div

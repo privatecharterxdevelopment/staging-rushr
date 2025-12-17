@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useAuth } from '../../../../contexts/AuthContext'
 import { supabase } from '../../../../lib/supabaseClient'
 import { Capacitor } from '@capacitor/core'
+import { showGlobalToast } from '../../../../components/Toast'
 import {
   CheckCircle,
   Clock,
@@ -47,8 +48,22 @@ export default function JobSuccessPage() {
   const [bids, setBids] = useState<Bid[]>([])
   const [loading, setLoading] = useState(true)
   const [secondsWaiting, setSecondsWaiting] = useState(0)
+  const [showSuccessOverlay, setShowSuccessOverlay] = useState(true)
 
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform()
+
+  // iOS Native: Show success overlay for 2.5 seconds then redirect to home
+  useEffect(() => {
+    if (!isNative) return
+
+    const timer = setTimeout(() => {
+      setShowSuccessOverlay(false)
+      showGlobalToast('Job posted successfully! Waiting for contractor bids...', 'success')
+      router.push('/')
+    }, 2500)
+
+    return () => clearTimeout(timer)
+  }, [isNative, router])
 
   // Timer for waiting animation
   useEffect(() => {
@@ -162,6 +177,53 @@ export default function JobSuccessPage() {
     return `${secs}s`
   }
 
+  // iOS Native: Show full-screen success overlay
+  if (isNative && showSuccessOverlay) {
+    return (
+      <div
+        className="fixed inset-0 flex flex-col items-center justify-center"
+        style={{ background: 'linear-gradient(160deg, #10b981 0%, #059669 50%, #047857 100%)' }}
+      >
+        {/* Success Animation */}
+        <div className="relative mb-6">
+          <div
+            className="absolute inset-0 w-28 h-28 rounded-full"
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              animation: 'successPing 1s ease-out'
+            }}
+          />
+          <div className="relative w-28 h-28 bg-white rounded-full flex items-center justify-center shadow-2xl">
+            <CheckCircle className="w-16 h-16 text-emerald-500" />
+          </div>
+        </div>
+
+        <h1 className="text-white text-2xl font-bold text-center px-6 mb-2">
+          Job Posted Successfully!
+        </h1>
+        <p className="text-white/80 text-center px-8 mb-6">
+          Contractors in your area are being notified
+        </p>
+
+        {/* Loading dots */}
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <div className="w-2 h-2 bg-white/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+
+        <p className="text-white/60 text-sm mt-4">Redirecting to home...</p>
+
+        <style jsx>{`
+          @keyframes successPing {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.5); opacity: 0; }
+          }
+        `}</style>
+      </div>
+    )
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-emerald-50 to-white flex items-center justify-center">
@@ -175,6 +237,7 @@ export default function JobSuccessPage() {
 
   const jobNumber = job?.job_number || id
 
+  // Web version - full success page experience
   return (
     <div
       className={`min-h-screen bg-gradient-to-b from-emerald-50 to-white ${isNative ? 'fixed inset-0 flex flex-col' : ''}`}
@@ -190,12 +253,12 @@ export default function JobSuccessPage() {
         >
           <div className="flex items-center px-4 py-3">
             <button
-              onClick={() => router.push('/dashboard/homeowner')}
+              onClick={() => router.push('/')}
               className="flex items-center text-white active:opacity-60"
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
               <ChevronLeft className="w-6 h-6" />
-              <span className="ml-1 font-medium">Dashboard</span>
+              <span className="ml-1 font-medium">Home</span>
             </button>
             <h1 className="flex-1 text-center text-white font-semibold text-lg pr-12">
               Job Submitted

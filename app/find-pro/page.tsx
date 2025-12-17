@@ -14,6 +14,7 @@ import { openAuth } from '../../components/AuthModal'
 import { Capacitor } from '@capacitor/core'
 import { getCurrentLocation } from '../../lib/nativeLocation'
 import { safeBack } from '../../lib/safeBack'
+import IOSTabBar, { TabId } from '../../components/IOSTabBar'
 
 // Dynamically import the Mapbox component to avoid SSR issues
 const FindProMapbox = dynamic(() => import('../../components/FindProMapbox'), {
@@ -174,6 +175,29 @@ export default function FindProPage() {
   // State for iOS filter modals
   const [showFilterModal, setShowFilterModal] = useState(false)
   const [showServicesModal, setShowServicesModal] = useState(false)
+  const [activeTab, setActiveTab] = useState<TabId>('home')
+
+  // Handle tab navigation for iOS native
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab)
+    switch (tab) {
+      case 'home':
+        router.push('/')
+        break
+      case 'jobs':
+        router.push('/dashboard/homeowner')
+        break
+      case 'messages':
+        router.push('/messages')
+        break
+      case 'notifications':
+        router.push('/notifications')
+        break
+      case 'profile':
+        router.push('/profile')
+        break
+    }
+  }
 
   // Debounce query so typing is smooth
   useEffect(() => {
@@ -782,14 +806,14 @@ export default function FindProPage() {
           >
             <div className="flex items-center px-4 py-3">
               <button
-                onClick={() => safeBack(router, '/')}
+                onClick={() => router.push('/')}
                 className="flex items-center text-white active:opacity-60"
                 style={{ WebkitTapHighlightColor: 'transparent' }}
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
-                <span className="ml-1 font-medium">Back</span>
+                <span className="ml-1 font-medium">Home</span>
               </button>
               <h1 className="flex-1 text-center text-white font-semibold text-[17px] pr-12">
                 Find a Pro
@@ -1348,6 +1372,12 @@ export default function FindProPage() {
             </div>
           </div>
         )}
+
+        {/* iOS Bottom Tab Bar */}
+        <IOSTabBar
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+        />
       </>
     )
   }

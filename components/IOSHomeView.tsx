@@ -1253,6 +1253,8 @@ interface Bid {
   contractor_longitude?: number
   calculated_eta?: number
   calculated_distance?: string
+  // Source table for bid management
+  source?: 'job_bids' | 'direct_offers'
 }
 
 interface BidTrackingOverlayProps {
@@ -3520,9 +3522,10 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
   const firstName = userProfile?.name?.split(' ')[0] || ''
   const email = userProfile?.email || user?.email || ''
 
-  // Location state
+  // Location state - use ref to prevent re-fetching
   const [center, setCenter] = useState<LatLng>([40.7128, -74.006])
   const [fetchingLocation, setFetchingLocation] = useState(false)
+  const locationFetchedRef = useRef(false)
 
   // Bid tracking state for Uber-style overlay
   const [activeJob, setActiveJob] = useState<HomeownerJob | null>(null)
@@ -3570,12 +3573,17 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
   }, [])
 
   // Get user location on mount - uses native Capacitor Geolocation
+  // Only fetch once - prevent re-fetching when switching tabs
   useEffect(() => {
+    // Skip if already fetched
+    if (locationFetchedRef.current) return
+
     const fetchLocation = async () => {
       setFetchingLocation(true)
       const result = await getNativeLocation()
       if (result.success && result.coordinates) {
         setCenter([result.coordinates.latitude, result.coordinates.longitude])
+        locationFetchedRef.current = true
       }
       setFetchingLocation(false)
     }
@@ -3590,70 +3598,60 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
       const pendingJob = jobs.find(
         (job) => job.status === 'pending' && !job.contractor_id
       )
-      if (pendingJob && !activeJob) {
+
+      // Update activeJob if:
+      // 1. There's a pending job and no current active job, OR
+      // 2. The pending job is different from the current active job (new job created)
+      if (pendingJob && (!activeJob || activeJob.id !== pendingJob.id)) {
         setActiveJob(pendingJob)
+        setBids([]) // Clear previous bids for the new job
         setBidsLoading(true)
         // Set loading to false after a brief delay to show the animation
         const timer = setTimeout(() => setBidsLoading(false), 3000)
         return () => clearTimeout(timer)
       }
+
+      // If no pending job and we had an active job, clear it
+      if (!pendingJob && activeJob?.status === 'pending') {
+        setActiveJob(null)
+        setBids([])
+      }
+    } else if (activeJob) {
+      // No jobs at all, clear active job
+      setActiveJob(null)
+      setBids([])
     }
   }, [jobs])
 
   // Real-time subscription for bids on the active job
+  // Supports both job_bids (emergency jobs) and direct_offers (direct contractor requests)
   useEffect(() => {
     if (!activeJob || !user) return
 
-    // Subscribe to direct_offers for this job
-    const subscription = supabase
-      .channel(`bids_${activeJob.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'direct_offers',
-          filter: `job_id=eq.${activeJob.id}`
-        },
-        async (payload) => {
-          // Fetch the updated bids list
-          const { data } = await supabase
-            .from('direct_offers')
-            .select(`
-              id,
-              contractor_id,
-              price,
-              message,
-              status,
-              created_at,
-              user_profiles:contractor_id (
-                name,
-                rating
-              )
-            `)
-            .eq('job_id', activeJob.id)
-            .eq('status', 'pending')
-            .order('created_at', { ascending: false })
+    // Function to fetch and combine bids from both tables
+    const fetchAllBids = async () => {
+      // Fetch from job_bids (emergency job bids)
+      const { data: jobBids } = await supabase
+        .from('job_bids')
+        .select(`
+          id,
+          contractor_id,
+          bid_amount,
+          message,
+          status,
+          created_at,
+          pro_contractors:contractor_id (
+            name,
+            business_name,
+            rating
+          )
+        `)
+        .eq('job_id', activeJob.id)
+        .in('status', ['pending', 'submitted'])
+        .order('created_at', { ascending: false })
 
-          if (data) {
-            const formattedBids: Bid[] = data.map((offer: any) => ({
-              id: offer.id,
-              contractor_id: offer.contractor_id,
-              contractor_name: offer.user_profiles?.name || 'Contractor',
-              contractor_rating: offer.user_profiles?.rating,
-              bid_amount: offer.price,
-              message: offer.message,
-              created_at: offer.created_at
-            }))
-            setBids(formattedBids)
-          }
-        }
-      )
-      .subscribe()
-
-    // Initial fetch of existing bids
-    const fetchExistingBids = async () => {
-      const { data } = await supabase
+      // Fetch from direct_offers (direct contractor requests)
+      const { data: directOffers } = await supabase
         .from('direct_offers')
         .select(`
           id,
@@ -3671,24 +3669,82 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
         .eq('status', 'pending')
         .order('created_at', { ascending: false })
 
-      if (data) {
-        const formattedBids: Bid[] = data.map((offer: any) => ({
-          id: offer.id,
-          contractor_id: offer.contractor_id,
-          contractor_name: offer.user_profiles?.name || 'Contractor',
-          contractor_rating: offer.user_profiles?.rating,
-          bid_amount: offer.price,
-          message: offer.message,
-          created_at: offer.created_at
-        }))
-        setBids(formattedBids)
+      // Combine and format bids from both sources
+      const formattedBids: Bid[] = []
+
+      // Add job_bids
+      if (jobBids) {
+        jobBids.forEach((bid: any) => {
+          formattedBids.push({
+            id: bid.id,
+            contractor_id: bid.contractor_id,
+            contractor_name: bid.pro_contractors?.business_name || bid.pro_contractors?.name || 'Contractor',
+            contractor_rating: bid.pro_contractors?.rating,
+            bid_amount: bid.bid_amount,
+            message: bid.message,
+            created_at: bid.created_at,
+            source: 'job_bids'
+          })
+        })
       }
+
+      // Add direct_offers
+      if (directOffers) {
+        directOffers.forEach((offer: any) => {
+          formattedBids.push({
+            id: offer.id,
+            contractor_id: offer.contractor_id,
+            contractor_name: offer.user_profiles?.name || 'Contractor',
+            contractor_rating: offer.user_profiles?.rating,
+            bid_amount: offer.price,
+            message: offer.message,
+            created_at: offer.created_at,
+            source: 'direct_offers'
+          })
+        })
+      }
+
+      // Sort by created_at descending
+      formattedBids.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      setBids(formattedBids)
     }
 
-    fetchExistingBids()
+    // Subscribe to job_bids for this job
+    const jobBidsSubscription = supabase
+      .channel(`job_bids_${activeJob.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'job_bids',
+          filter: `job_id=eq.${activeJob.id}`
+        },
+        () => fetchAllBids()
+      )
+      .subscribe()
+
+    // Subscribe to direct_offers for this job
+    const directOffersSubscription = supabase
+      .channel(`direct_offers_${activeJob.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'direct_offers',
+          filter: `job_id=eq.${activeJob.id}`
+        },
+        () => fetchAllBids()
+      )
+      .subscribe()
+
+    // Initial fetch of existing bids
+    fetchAllBids()
 
     return () => {
-      subscription.unsubscribe()
+      jobBidsSubscription.unsubscribe()
+      directOffersSubscription.unsubscribe()
     }
   }, [activeJob, user])
 
@@ -3831,9 +3887,10 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
     if (!activeJob) return
 
     try {
-      // Update the direct_offer status to accepted
+      // Update the bid status based on source table
+      const bidTable = bid.source === 'job_bids' ? 'job_bids' : 'direct_offers'
       await supabase
-        .from('direct_offers')
+        .from(bidTable)
         .update({ status: 'accepted' })
         .eq('id', bid.id)
 
@@ -3843,17 +3900,26 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
         .update({
           contractor_id: bid.contractor_id,
           status: 'confirmed',
-          estimated_cost: bid.bid_amount
+          estimated_cost: bid.bid_amount,
+          accepted_bid_id: bid.id
         })
         .eq('id', activeJob.id)
 
-      // Decline all other pending bids
-      await supabase
-        .from('direct_offers')
-        .update({ status: 'declined' })
-        .eq('job_id', activeJob.id)
-        .neq('id', bid.id)
-        .eq('status', 'pending')
+      // Decline all other pending bids from both tables
+      await Promise.all([
+        supabase
+          .from('direct_offers')
+          .update({ status: 'declined' })
+          .eq('job_id', activeJob.id)
+          .neq('id', bid.id)
+          .eq('status', 'pending'),
+        supabase
+          .from('job_bids')
+          .update({ status: 'rejected' })
+          .eq('job_id', activeJob.id)
+          .neq('id', bid.id)
+          .in('status', ['pending', 'submitted'])
+      ])
 
       // Clear the active job overlay
       setActiveJob(null)
@@ -3866,10 +3932,13 @@ export default function IOSHomeView({ onSwitchToContractor }: IOSHomeViewProps =
   // Handler for declining a bid
   const handleDeclineBid = async (bid: Bid) => {
     try {
-      // Update the direct_offer status to declined
+      // Update the bid status based on source table
+      const bidTable = bid.source === 'job_bids' ? 'job_bids' : 'direct_offers'
+      const declinedStatus = bid.source === 'job_bids' ? 'rejected' : 'declined'
+
       await supabase
-        .from('direct_offers')
-        .update({ status: 'declined' })
+        .from(bidTable)
+        .update({ status: declinedStatus })
         .eq('id', bid.id)
 
       // Remove from local state

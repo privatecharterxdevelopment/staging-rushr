@@ -7,9 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-11-20.acacia'
-})
 
 /**
  * GET /api/stripe/customer/payment-methods?userId=xxx
@@ -43,7 +40,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch payment methods from Stripe
-    const paymentMethods = await stripe.paymentMethods.list({
+    const paymentMethods = await getStripe().paymentMethods.list({
       customer: customer.stripe_customer_id,
       type: 'card'
     })

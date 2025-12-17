@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import Stripe from 'stripe'
 import { createClient } from '@supabase/supabase-js'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-11-20.acacia'
-})
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -38,7 +35,7 @@ export async function GET(req: Request) {
     }
 
     // Fetch all charges for this customer from Stripe
-    const charges = await stripe.charges.list({
+    const charges = await getStripe().charges.list({
       customer: profile.stripe_customer_id,
       limit: 100,
       expand: ['data.payment_intent']
