@@ -365,41 +365,65 @@ export default function TrackContractorPage() {
   }
 
   return (
-    <div className="relative h-screen w-full overflow-hidden">
-      {/* Map */}
-      <div ref={mapContainer} className="absolute inset-0" />
-
-      {/* Top ETA Banner */}
-      <div
-        className="absolute top-0 left-0 right-0 z-10"
-        style={{ paddingTop: isNative ? 'env(safe-area-inset-top)' : '0' }}
-      >
-        <div className="p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-4 max-w-md mx-auto backdrop-blur-sm bg-white/95">
-          <div className="flex items-center gap-4">
-            <div className={`w-3 h-3 rounded-full ${getStatusColor(location?.status)} animate-pulse`}></div>
-            <div className="flex-1">
-              <p className="text-sm text-slate-600">{getStatusText(location?.status)}</p>
-              <p className="text-2xl font-bold text-slate-900">
-                {location?.status === 'arrived' ? 'Arrived!' : `${formatETA(location?.eta_minutes)} away`}
-              </p>
-            </div>
-            {location?.distance_to_job_meters && (
-              <div className="text-right">
-                <p className="text-sm text-slate-600">Distance</p>
-                <p className="text-lg font-semibold text-slate-900">
-                  {(location.distance_to_job_meters / 1000).toFixed(1)} km
-                </p>
-              </div>
-            )}
+    <div className="fixed inset-0 flex flex-col bg-white overflow-hidden">
+      {/* iOS Native Green Header */}
+      {isNative && (
+        <div
+          className="relative z-50 flex-shrink-0"
+          style={{
+            background: 'linear-gradient(135deg, #10b981, #059669)',
+            paddingTop: 'max(env(safe-area-inset-top, 59px), 59px)'
+          }}
+        >
+          <div className="flex items-center px-4 py-3">
+            <button
+              onClick={() => router.push('/')}
+              className="flex items-center text-white active:opacity-60"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              <span className="ml-1 font-medium">Home</span>
+            </button>
+            <h1 className="flex-1 text-center text-white font-semibold text-lg pr-12">
+              Track Contractor
+            </h1>
           </div>
         </div>
+      )}
+
+      {/* Map - Full remaining height */}
+      <div className="flex-1 relative">
+        <div ref={mapContainer} className="absolute inset-0" />
+
+        {/* ETA Card Overlay */}
+        <div className="absolute top-4 left-4 right-4 z-10">
+          <div className="bg-white rounded-2xl shadow-2xl p-4 backdrop-blur-sm bg-white/95">
+            <div className="flex items-center gap-4">
+              <div className={`w-3 h-3 rounded-full ${getStatusColor(location?.status)} animate-pulse`}></div>
+              <div className="flex-1">
+                <p className="text-sm text-slate-600">{getStatusText(location?.status)}</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  {location?.status === 'arrived' ? 'Arrived!' : `${formatETA(location?.eta_minutes)} away`}
+                </p>
+              </div>
+              {location?.distance_to_job_meters && (
+                <div className="text-right">
+                  <p className="text-sm text-slate-600">Distance</p>
+                  <p className="text-lg font-semibold text-slate-900">
+                    {(location.distance_to_job_meters / 1000).toFixed(1)} km
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Bottom Contractor Card */}
       <div
-        className="absolute bottom-0 left-0 right-0 z-10"
+        className="flex-shrink-0 z-10"
         style={{ paddingBottom: isNative ? 'env(safe-area-inset-bottom)' : '0' }}
       >
         <div className="p-4 pb-2">
@@ -469,19 +493,21 @@ export default function TrackContractorPage() {
         </div>
       </div>
 
-      {/* Back Button */}
-      <button
-        onClick={() => router.push('/dashboard/homeowner')}
-        className="absolute z-20 w-10 h-10 bg-white hover:bg-slate-100 rounded-full shadow-lg flex items-center justify-center transition-colors"
-        style={{
-          top: isNative ? 'calc(16px + env(safe-area-inset-top))' : '16px',
-          left: '16px'
-        }}
-      >
-        <svg className="w-6 h-6 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
+      {/* Web Back Button - only shown when not native */}
+      {!isNative && (
+        <button
+          onClick={() => router.push('/dashboard/homeowner')}
+          className="absolute z-20 w-10 h-10 bg-white hover:bg-slate-100 rounded-full shadow-lg flex items-center justify-center transition-colors"
+          style={{
+            top: '16px',
+            left: '16px'
+          }}
+        >
+          <svg className="w-6 h-6 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+      )}
     </div>
   )
 }

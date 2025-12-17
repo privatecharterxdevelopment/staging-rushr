@@ -408,7 +408,7 @@ export default function JobSuccessPage() {
             )}
 
             <Link
-              href="/dashboard/homeowner"
+              href="/"
               className="w-full btn btn-outline flex items-center justify-center gap-2 py-4"
             >
               <Bell className="h-5 w-5" />
