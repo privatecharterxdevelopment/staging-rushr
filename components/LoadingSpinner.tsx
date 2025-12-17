@@ -11,12 +11,57 @@ interface LoadingSpinnerProps {
   color?: 'blue' | 'emerald'
 }
 
-// Animated logo URL - consistent across the app
-const LOADING_LOGO_URL = 'https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/RushrLogoAnimation.gif'
+// Rushr logo URL (static SVG)
+const RUSHR_LOGO_URL = 'https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/Rushr%20Logo%20Vector.svg'
 
-// Universal Full-Screen Loading Component - Pure white background with animated logo
-// Matches the iOS native splash screen exactly - no safe area padding to avoid colored gaps
-export function FullScreenLoading() {
+// ========================================
+// UNIFIED LOADER - Logo with spinner ring
+// Use this ONE loader throughout the app
+// ========================================
+export function RushrLoader({
+  size = 'md',
+  text
+}: {
+  size?: 'sm' | 'md' | 'lg' | 'xl'
+  text?: string
+}) {
+  const sizes = {
+    sm: { container: 40, logo: 24, border: 2 },
+    md: { container: 56, logo: 32, border: 3 },
+    lg: { container: 72, logo: 44, border: 3 },
+    xl: { container: 96, logo: 56, border: 4 }
+  }
+
+  const s = sizes[size]
+
+  return (
+    <div className="flex flex-col items-center">
+      <div
+        className="relative flex items-center justify-center"
+        style={{ width: s.container, height: s.container }}
+      >
+        {/* Spinning ring */}
+        <div
+          className="absolute inset-0 rounded-full border-emerald-200 border-t-emerald-600 animate-spin"
+          style={{ borderWidth: s.border }}
+        />
+        {/* Logo in center */}
+        <img
+          src={RUSHR_LOGO_URL}
+          alt="Rushr"
+          style={{ width: s.logo, height: s.logo }}
+          className="object-contain"
+        />
+      </div>
+      {text && (
+        <p className="text-slate-600 text-sm mt-3">{text}</p>
+      )}
+    </div>
+  )
+}
+
+// Full screen loader with white background
+export function FullScreenLoading({ text }: { text?: string }) {
   return (
     <div
       style={{
@@ -32,17 +77,10 @@ export function FullScreenLoading() {
         zIndex: 9999
       }}
     >
-      <img
-        src={LOADING_LOGO_URL}
-        alt="Loading..."
-        style={{ width: 64, height: 64, objectFit: 'contain' }}
-      />
+      <RushrLoader size="lg" text={text} />
     </div>
   )
 }
-
-// Rushr logo URL
-const RUSHR_LOGO_URL = 'https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/Rushr%20Logo%20Vector.svg'
 
 // iOS Native Loading Component - Splash style with pulsing logo
 function IOSNativeLoader({ size = 'lg', text }: { size?: 'sm' | 'md' | 'lg' | 'xl', text?: string }) {

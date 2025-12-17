@@ -369,14 +369,18 @@ export default function ContractorProfilePage() {
     }
 
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <img
-            src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/RushrLogoAnimation.gif"
-            alt="Loading..."
-            className="w-12 h-12 object-contain mx-auto mb-4"
-          />
-          <div className="text-lg font-medium text-slate-700">Loading contractor profile...</div>
+      <div className="flex items-center justify-center min-h-screen bg-white">
+        <div className="flex flex-col items-center">
+          <div className="relative flex items-center justify-center" style={{ width: 72, height: 72 }}>
+            <div className="absolute inset-0 rounded-full border-emerald-200 border-t-emerald-600 animate-spin" style={{ borderWidth: 3 }} />
+            <img
+              src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/Rushr%20Logo%20Vector.svg"
+              alt="Rushr"
+              style={{ width: 44, height: 44 }}
+              className="object-contain"
+            />
+          </div>
+          <p className="text-slate-600 text-sm mt-3">Loading contractor...</p>
         </div>
       </div>
     )

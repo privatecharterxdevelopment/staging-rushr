@@ -335,14 +335,18 @@ export default function TrackContractorPage() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-slate-100">
-        <div className="text-center">
-          <img
-          src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/RushrLogoAnimation.gif"
-          alt="Loading..."
-          className="h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4 object-contain"
-        />
-          <p className="text-slate-600">Loading tracking...</p>
+      <div className="h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center">
+          <div className="relative flex items-center justify-center" style={{ width: 72, height: 72 }}>
+            <div className="absolute inset-0 rounded-full border-emerald-200 border-t-emerald-600 animate-spin" style={{ borderWidth: 3 }} />
+            <img
+              src="https://jtrxdcccswdwlritgstp.supabase.co/storage/v1/object/public/contractor-logos/Rushr%20Logo%20Vector.svg"
+              alt="Rushr"
+              style={{ width: 44, height: 44 }}
+              className="object-contain"
+            />
+          </div>
+          <p className="text-slate-600 text-sm mt-3">Loading tracking...</p>
         </div>
       </div>
     )

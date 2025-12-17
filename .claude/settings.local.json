@@ -22,7 +22,16 @@
       "Bash(export LANG=en_US.UTF-8)",
       "Bash(xcrun simctl:*)",
       "Bash(xcrun simctl install:*)",
-      "Bash(xcrun simctl launch:*)"
+      "Bash(xcrun simctl launch:*)",
+      "Bash(pkill:*)",
+      "Bash(for f in app/api/stripe/*/route.ts app/api/stripe/*/*/route.ts)",
+      "Bash(do)",
+      "Bash(if [ -f \"$f\" ])",
+      "Bash(then)",
+      "Bash(if grep -q \"new Stripe(process.env.STRIPE_SECRET_KEY\" \"$f\")",
+      "Bash(echo:*)",
+      "Bash(fi)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
