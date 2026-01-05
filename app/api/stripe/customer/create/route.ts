@@ -7,9 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-09-30.clover'
-})
 
 /**
  * POST /api/stripe/customer/create
@@ -42,7 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create Stripe customer
-    const customer = await stripe.customers.create({
+    const customer = await getStripe().customers.create({
       email: email,
       name: name,
       metadata: {

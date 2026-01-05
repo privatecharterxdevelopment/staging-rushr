@@ -7,9 +7,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-09-30.clover'
-})
 
 /**
  * POST /api/stripe/customer/setup-intent
@@ -27,7 +24,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create Setup Intent
-    const setupIntent = await stripe.setupIntents.create({
+    const setupIntent = await getStripe().setupIntents.create({
       customer: customerId,
       payment_method_types: ['card'],
       metadata: {
